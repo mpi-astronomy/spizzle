@@ -32,6 +32,7 @@ test = [
     # the drizzle comparison tests need float64 output arrays in drizzle, not yet released;
     # CI installs jdavies-st/drizzle@float64-phase2-c-accepts-float64 over this
     "drizzle",
+    "astropy",  # Covariance.write_correlation
     "pytest",
     "flake8",
     "flake8-pyproject",

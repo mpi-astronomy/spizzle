@@ -548,14 +548,54 @@ Findings:
      there and the 13 planes take 9.5 GiB, so the laptop was short of
      memory.
 
+   Use case and decisions (user, 2026-11-01): exposures of 2048² are
+   resampled one at a time onto an output grid 2-10× their area; the goal
+   is a better estimate of the mosaic's uncertainty. The 12 correlation
+   images stay out of the output mosaic, optionally in a separate file; a
+   per-pixel noise factor map could replace the ERR array. (Note: the
+   current ERR, `sqrt(var)`, is exact for single pixels;
+   `sqrt(var * noise_factor)` is right for sums over areas larger than an
+   input pixel's footprint, such as apertures, and overstates single-pixel
+   errors by `sqrt(noise_factor)`.)
+
+   Then, 2026-11-01:
+   - `Operator.reach`, the largest distance in y or x between two output
+     pixels that share an input pixel, found while `build_operator`
+     counts the entries (chunks start at an input pixel's first triplet).
+     `Covariance(radius=None)` takes the reach of the first operator and
+     warns when one reaches farther than the radius.
+   - Sums in float32 by default (each exposure's contribution computed in
+     float64); `dtype=np.float64` keeps them, and the variance equal to
+     `Coadd.out_var` bit for bit. float32 is within 1e-6 of float64.
+   - Results made one image at a time, in parallel: `covariance(k)`,
+     `correlation(k)` (the weights cancel: `cnum[o] / sqrt(cnum0[o]
+     cnum0[o'])`), and `noise_factor`, each pixel's covariance with all
+     pixels over its variance, `wsum[o] / cnum0[o] * sum(cnum[k, o] /
+     wsum[o + d] + cnum[k, o - d] / wsum[o - d])`. `out_cov` still stacks
+     all images.
+   - `write_correlation(path)`: FITS with CORR, a float32 cube of the
+     correlation for offsets 1 to n-1, written one image at a time
+     (`StreamingHDU`), and an OFFSETS table. astropy is imported only
+     there; it is now a test dependency. astropy's `StreamingHDU` takes
+     only the name of a `pathlib.Path`, so the path is passed as a string.
+
+   The 8 `nrcalong` exposures one at a time onto the native mosaic
+   (5579×4380, 5.8 exposures' area, pixfrac 1, radius 2 from the reach):
+   read 0.62 s, `pixel_map` 0.21 s, `drizzle_operator` 4.1 s, `Coadd.add`
+   0.51 s, `Covariance.add` 1.18 s in total; `noise_factor` 0.09 s;
+   `write_correlation` 1.2 s for 1.09 GiB. Sums: `Coadd` 1.0 GiB,
+   `Covariance` 1.37 GiB; peak resident memory 3.2 GiB. Noise factor over
+   the 13.8 M pixels with weight: median 2.33, 5% 1.65, 95% 3.38, against
+   Casertano's 2.25 everywhere for pixfrac/s = 1.
+
+   Memory for the use case (per output pixel: `Coadd` 44 B, `Covariance`
+   (2r(r+1)+1) × 4 + 8 B): native scale, r=2, 2-10× an exposure's area:
+   0.5-2.3 GiB for the covariance. 2× oversampling, r=3, 4× the pixels:
+   3.4-17 GiB.
+
    Open:
-   - memory on mosaics: `2r(r+1) + 1` output-sized float64 planes
-     (25 planes, 18 GiB, for the complete 2× NIRCam mosaic at r=3).
-     Options: float32 planes once summed, covariance only for a region,
-     or per exposure on its box;
-   - `Operator` could record the largest offset between output pixels
-     that share an input pixel, so that `Covariance` can pick or check
-     the radius;
-   - a correlation helper (`cov / sqrt(var var')`) and the large-area
-     noise ratio for a region, as used for aperture photometry.
+   - 2× oversampled mosaics at the large end: tile the output out of core
+     (each exposure's operator to disk, a tile's rows plus a margin of r);
+   - covariance for a region only, and the exact variance of apertures or
+     other weighted sums through `W.T` in a second pass, if needed.
 

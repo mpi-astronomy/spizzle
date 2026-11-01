@@ -10,11 +10,16 @@ those sums over the weights,
 
 An input pixel reaches only the few output pixels under its footprint, so
 the covariance is zero beyond a small offset between ``o`` and ``o'``.
-`Covariance` keeps it for the offsets up to ``radius`` in each coordinate,
+`Covariance` keeps it for the offsets up to a radius in each coordinate,
 one image per offset.  Entry ``(o, o')`` is the weighted dot product of
 rows ``o`` and ``o'`` of ``W``, computed for every output pixel and offset
-in parallel.
+in parallel.  From it come the correlation of each pixel with its
+neighbors and the noise factor of each pixel, by which the variance of a
+sum over a large area exceeds the sum of its pixels' variances.
 """
+import os
+import warnings
+
 import numba
 import numpy as np
 
@@ -26,45 +31,64 @@ __all__ = [
 
 
 class Covariance:
-    """Covariance between nearby pixels of the image of drizzled exposures, in float64.
+    """Covariance between nearby pixels of the image of drizzled exposures.
 
     Add the same operators as to `Coadd`, each with the variance of its
     exposure's data (for example the sum of its variance planes); the image
     is `Coadd.out_img`.  The covariance is kept for the offsets ``(dy, dx)``
-    with ``|dy|, |dx| <= radius``, for half of them: ``(0, 0)``, then
-    ``(0, 1)`` to ``(0, radius)``, then ``(dy, -radius)`` to ``(dy, radius)``
-    for ``dy`` from 1 to ``radius``.  The others follow from
-    ``Cov(img[y, x], img[y - dy, x - dx]) = out_cov[k][y - dy, x - dx]``.
-    Pixels farther apart than the footprint of an input pixel on the
-    output grid share no input pixel and have no covariance, so it is
-    complete for ``radius >= ceil(pixfrac * p * sqrt(2))``, with ``p`` the
-    input pixel size in output pixels: 2 for ``p = 1`` and ``pixfrac = 1``,
-    3 for ``p = 2`` and ``pixfrac = 0.8``.  It takes ``2 * radius *
-    (radius + 1) + 1`` output-sized float64 images.
+    with ``|dy|, |dx| <= radius``, for half of them, listed in `offsets`:
+    ``(0, 0)``, then ``(0, 1)`` to ``(0, radius)``, then ``(dy, -radius)``
+    to ``(dy, radius)`` for ``dy`` from 1 to ``radius``.  The others follow
+    from ``Cov(img[y, x], img[y - dy, x - dx]) = covariance(k)[y - dy, x - dx]``.
+
+    Pixels farther apart than an input pixel's footprint share no input
+    pixel and have no covariance; `Operator.reach` is that distance.  By
+    default the radius is the reach of the first operator added.  An
+    operator that reaches farther than the radius gives a warning, as the
+    covariance beyond the radius is left out.
+
+    The sums take ``2 * radius * (radius + 1) + 1`` output-sized images of
+    ``dtype``; each exposure's contribution is computed in float64 before
+    it is added.  Output pixels that no exposure reaches are not written,
+    so the system does not give them memory until the results are made.
+    The results are made one image at a time.
 
     Parameters
     ----------
     out_shape : tuple of int
         ``(ny_out, nx_out)``.
-    radius : int
-        Largest offset kept, in output pixels, in y and in x.
+    radius : int, optional
+        Largest offset kept, in output pixels, in y and in x; by default
+        the reach of the first operator added.
+    dtype : {numpy.float32, numpy.float64}
+        Type of the sums and of the results.
     fillval : float
-        Value where the pixel or its neighbor has no weight, or the
-        neighbor is outside the output grid.
+        Value where the pixel or its neighbor has no weight or variance, or
+        the neighbor is outside the output grid.
     """
 
-    def __init__(self, out_shape, radius=2, fillval=np.nan):
-        if radius < 0:
+    def __init__(self, out_shape, radius=None, dtype=np.float32, fillval=np.nan):
+        if radius is not None and radius < 0:
             raise ValueError(f"radius must not be negative, not {radius}")
+        self.dtype = np.dtype(dtype)
+        if self.dtype not in (np.dtype(np.float32), np.dtype(np.float64)):
+            raise ValueError(f"dtype must be float32 or float64, not {self.dtype}")
         self.out_shape = tuple(out_shape)
-        self.radius = int(radius)
         self.fillval = fillval
-        r = self.radius
+        self.radius = None
+        self.offsets = None
+        self._cnum = None
+        self._wsum = np.zeros(self.out_shape[0] * self.out_shape[1])
+        if radius is not None:
+            self._allocate(int(radius))
+
+    def _allocate(self, radius):
+        """Set the radius and offsets, and make the sums."""
+        r = radius
         offsets = [(0, dx) for dx in range(r + 1)] + [(dy, dx) for dy in range(1, r + 1) for dx in range(-r, r + 1)]
+        self.radius = r
         self.offsets = np.array(offsets, dtype=np.int64).reshape(-1, 2)
-        n_out = self.out_shape[0] * self.out_shape[1]
-        self._cnum = np.zeros((len(self.offsets), n_out))
-        self._wsum = np.zeros(n_out)
+        self._cnum = np.zeros((len(self.offsets), self._wsum.size), dtype=self.dtype)
 
     def add(self, W, var, iscale=1.0):
         """Add one exposure.
@@ -72,7 +96,8 @@ class Covariance:
         Parameters
         ----------
         W : Operator or scipy.sparse array
-            The exposure's operator, as for `Coadd.add`.
+            The exposure's operator, as for `Coadd.add`.  A sparse array
+            records no reach, so it needs the radius to be set.
         var : ndarray, shape (ny, nx)
             Variance of the exposure's data.
         iscale : float
@@ -80,35 +105,137 @@ class Covariance:
         """
         var = np.asarray(var, dtype=np.float64)
         matrix, y0, x0, box_ny, box_nx = _box_rows(W, self.out_shape, var.size)
+        reach = getattr(W, "reach", None)
+        if self._cnum is None:
+            if reach is None:
+                raise ValueError("the radius must be given for operators that do not record their reach")
+            self._allocate(reach)
+        elif reach is not None and reach > self.radius:
+            warnings.warn(f"the operator's input pixels reach {reach} output pixels, more than the radius {self.radius}; "
+                          "the covariance at larger offsets is left out", stacklevel=2)
         if not matrix.has_sorted_indices:
             matrix = matrix.sorted_indices()
         _add_covariance(matrix.indptr, matrix.indices, matrix.data, y0, x0, box_ny, box_nx, self.out_shape[1],
                         var.ravel(), iscale * iscale, self.offsets, self._cnum, self._wsum)
 
-    @property
-    def out_cov(self):
-        """ndarray, shape (n_offsets,) + out_shape: plane k holds ``Cov(img[y, x], img[y + dy, x + dx])`` for ``offsets[k]``."""
-        return np.array([self._plane(k) for k in range(len(self.offsets))])
+    def covariance(self, k):
+        """Covariance of each pixel with its neighbor at ``offsets[k]``.
+
+        Parameters
+        ----------
+        k : int
+
+        Returns
+        -------
+        ndarray, shape out_shape
+            ``Cov(img[y, x], img[y + dy, x + dx])``; `fillval` where either
+            pixel has no weight or the neighbor is off the grid.
+        """
+        self._check_added()
+        dy, dx = self.offsets[k]
+        out = np.empty(self.out_shape, dtype=self.dtype)
+        _normalized(self._cnum[k], self._wsum, self.out_shape[0], self.out_shape[1], dy, dx, self.fillval, out)
+        return out
+
+    def correlation(self, k):
+        """Correlation coefficient of each pixel with its neighbor at ``offsets[k]``.
+
+        Parameters
+        ----------
+        k : int
+
+        Returns
+        -------
+        ndarray, shape out_shape
+            ``Cov(img[o], img[o']) / sqrt(Var(img[o]) Var(img[o']))``;
+            `fillval` where either pixel has no variance or the neighbor is
+            off the grid.
+        """
+        self._check_added()
+        dy, dx = self.offsets[k]
+        out = np.empty(self.out_shape, dtype=self.dtype)
+        _correlated(self._cnum[k], self._cnum[0], self.out_shape[0], self.out_shape[1], dy, dx, self.fillval, out)
+        return out
 
     @property
     def out_var(self):
-        """ndarray, shape out_shape: variance of the image, the plane of offset (0, 0)."""
-        return self._plane(0)
+        """ndarray, shape out_shape: variance of the image, `covariance` at offset (0, 0)."""
+        return self.covariance(0)
 
-    def _plane(self, k):
-        """Covariance for ``offsets[k]``, normalized by the weights of both pixels."""
-        ny, nx = self.out_shape
-        dy, dx = self.offsets[k]
-        wsum = self._wsum.reshape(ny, nx)
-        out = np.full((ny, nx), self.fillval, dtype=np.float64)
-        # pixels (y, x) whose neighbor (y + dy, x + dx) is on the grid
-        here = (slice(0, ny - dy), slice(max(0, -dx), nx - max(0, dx)))
-        there = (slice(dy, ny), slice(max(0, dx), nx - max(0, -dx)))
-        w_here = wsum[here]
-        w_there = wsum[there]
-        good = (w_here != 0.0) & (w_there != 0.0)
-        out[here][good] = self._cnum[k].reshape(ny, nx)[here][good] / (w_here[good] * w_there[good])
+    @property
+    def out_cov(self):
+        """ndarray, shape (n_offsets,) + out_shape: `covariance` for every offset, all in memory at once."""
+        return np.array([self.covariance(k) for k in range(len(self.offsets))])
+
+    @property
+    def noise_factor(self):
+        """ndarray, shape out_shape: covariance of each pixel with every pixel, over its variance.
+
+        The variance of a sum over an area much larger than an input
+        pixel's footprint is the sum of the variances of its pixels times
+        this factor, so ``sqrt(var * noise_factor)`` is the uncertainty of
+        each pixel for such sums, where ``sqrt(var)`` is that of the pixel
+        alone.  For evenly dithered exposures it is the square of the
+        noise ratio R of Casertano et al. (2000).  `fillval` where the
+        pixel has no weight or variance.
+        """
+        self._check_added()
+        out = np.empty(self.out_shape, dtype=self.dtype)
+        _noise_factor(self._cnum, self._wsum, self.offsets, self.out_shape[0], self.out_shape[1], self.fillval, out)
         return out
+
+    def write_correlation(self, path, overwrite=False):
+        """Write the correlation of each pixel with its neighbors to a FITS file.
+
+        Extension CORR is a float32 cube of shape ``(n_offsets - 1,) +
+        out_shape`` whose plane ``k - 1`` is `correlation` for
+        ``offsets[k]``, k from 1, and extension OFFSETS a table of their
+        ``dy`` and ``dx``; the primary header has the radius.  The planes
+        are made and written one at a time.  Needs astropy.
+
+        Parameters
+        ----------
+        path : str or os.PathLike
+        overwrite : bool
+            Replace an existing file.
+        """
+        from astropy.io import fits
+
+        # a string, as astropy's StreamingHDU takes only the name of a pathlib.Path
+        path = os.fspath(path)
+        self._check_added()
+        if self.radius == 0:
+            raise ValueError("radius 0 keeps no correlation to write")
+        if os.path.exists(path):
+            if not overwrite:
+                raise OSError(f"{path} exists; pass overwrite=True to replace it")
+            os.remove(path)
+
+        primary = fits.PrimaryHDU()
+        primary.header["RADIUS"] = (self.radius, "largest offset in y and x, output pixels")
+        primary.writeto(path)
+        ny, nx = self.out_shape
+        header = fits.Header([
+            ("XTENSION", "IMAGE"), ("BITPIX", -32), ("NAXIS", 3),
+            ("NAXIS1", nx), ("NAXIS2", ny), ("NAXIS3", len(self.offsets) - 1),
+            ("PCOUNT", 0), ("GCOUNT", 1), ("EXTNAME", "CORR"),
+        ])
+        stream = fits.StreamingHDU(path, header)
+        try:
+            for k in range(1, len(self.offsets)):
+                stream.write(self.correlation(k).astype(np.float32))
+        finally:
+            stream.close()
+        offsets = fits.BinTableHDU.from_columns([
+            fits.Column(name="dy", format="J", array=self.offsets[1:, 0]),
+            fits.Column(name="dx", format="J", array=self.offsets[1:, 1]),
+        ], name="OFFSETS")
+        with fits.open(path, mode="append") as hdus:
+            hdus.append(offsets)
+
+    def _check_added(self):
+        if self._cnum is None:
+            raise ValueError("no exposure has been added")
 
 
 @numba.njit(parallel=True, cache=True, error_model="numpy")
@@ -130,7 +257,7 @@ def _add_covariance(indptr, indices, values, y0, x0, box_ny, box_nx, nx_out, var
     var : ndarray, shape (n_in,)
     iscale2 : float
     offsets : ndarray of int64, shape (n_offsets, 2)
-    cnum : ndarray of float64, shape (n_offsets, n_out)
+    cnum : ndarray, shape (n_offsets, n_out)
     wsum : ndarray of float64, shape (n_out,)
     """
     for by in numba.prange(box_ny):
@@ -167,3 +294,95 @@ def _add_covariance(indptr, indices, values, y0, x0, box_ny, box_nx, nx_out, var
                     else:
                         b += 1
                 cnum[m, o] += s
+
+
+@numba.njit(parallel=True, cache=True, error_model="numpy")
+def _normalized(cnum, wsum, ny, nx, dy, dx, fillval, out):
+    """``cnum[o] / (wsum[o] wsum[o'])`` for ``o' = o + (dy, dx)``, `fillval` where undefined.
+
+    Parameters
+    ----------
+    cnum : ndarray, shape (ny * nx,)
+        Summed covariance of one offset.
+    wsum : ndarray of float64, shape (ny * nx,)
+    ny, nx, dy, dx : int
+    fillval : float
+    out : ndarray, shape (ny, nx)
+        Filled in place.
+    """
+    for y in numba.prange(ny):
+        for x in range(nx):
+            y2 = y + dy
+            x2 = x + dx
+            w = wsum[y * nx + x]
+            if y2 >= ny or x2 < 0 or x2 >= nx or w == 0.0 or wsum[y2 * nx + x2] == 0.0:
+                out[y, x] = fillval
+            else:
+                out[y, x] = cnum[y * nx + x] / (w * wsum[y2 * nx + x2])
+
+
+@numba.njit(parallel=True, cache=True, error_model="numpy")
+def _correlated(cnum, cnum0, ny, nx, dy, dx, fillval, out):
+    """``cnum[o] / sqrt(cnum0[o] cnum0[o'])`` for ``o' = o + (dy, dx)``; the weights cancel.
+
+    Parameters
+    ----------
+    cnum, cnum0 : ndarray, shape (ny * nx,)
+        Summed covariance of one offset and of offset (0, 0).
+    ny, nx, dy, dx : int
+    fillval : float
+    out : ndarray, shape (ny, nx)
+        Filled in place.
+    """
+    for y in numba.prange(ny):
+        for x in range(nx):
+            y2 = y + dy
+            x2 = x + dx
+            v = cnum0[y * nx + x]
+            if y2 >= ny or x2 < 0 or x2 >= nx or v <= 0.0 or cnum0[y2 * nx + x2] <= 0.0:
+                out[y, x] = fillval
+            else:
+                out[y, x] = cnum[y * nx + x] / np.sqrt(np.float64(v) * cnum0[y2 * nx + x2])
+
+
+@numba.njit(parallel=True, cache=True, error_model="numpy")
+def _noise_factor(cnum, wsum, offsets, ny, nx, fillval, out):
+    """Sum of the covariance of each pixel with all pixels, over its variance.
+
+    With ``Cov(o, o + d) = cnum[k, o] / (wsum[o] wsum[o + d])`` for the kept
+    offsets d and ``Cov(o, o - d) = cnum[k, o - d] / (wsum[o - d] wsum[o])``
+    for the others, and ``Var(o) = cnum[0, o] / wsum[o]**2``, the factor is
+    ``wsum[o] / cnum[0, o]`` times the sum of ``cnum[k, o] / wsum[o + d]``
+    and ``cnum[k, o - d] / wsum[o - d]`` over the neighbors with weight.
+
+    Parameters
+    ----------
+    cnum : ndarray, shape (n_offsets, ny * nx)
+    wsum : ndarray of float64, shape (ny * nx,)
+    offsets : ndarray of int64, shape (n_offsets, 2)
+    ny, nx : int
+    fillval : float
+    out : ndarray, shape (ny, nx)
+        Filled in place.
+    """
+    for y in numba.prange(ny):
+        for x in range(nx):
+            o = y * nx + x
+            w = wsum[o]
+            v = cnum[0, o]
+            if w == 0.0 or v <= 0.0:
+                out[y, x] = fillval
+                continue
+            total = 0.0
+            for m in range(offsets.shape[0]):
+                dy = offsets[m, 0]
+                dx = offsets[m, 1]
+                y2 = y + dy
+                x2 = x + dx
+                if y2 < ny and 0 <= x2 < nx and wsum[y2 * nx + x2] != 0.0:
+                    total += cnum[m, o] / wsum[y2 * nx + x2]
+                y3 = y - dy
+                x3 = x - dx
+                if m > 0 and y3 >= 0 and 0 <= x3 < nx and wsum[y3 * nx + x3] != 0.0:
+                    total += cnum[m, y3 * nx + x3] / wsum[y3 * nx + x3]
+            out[y, x] = total * w / v

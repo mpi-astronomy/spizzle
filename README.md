@@ -134,27 +134,43 @@ op = build_operator(triplets, jaco, out_shape, weights=weights)
 
 Drizzling correlates the noise of neighboring output pixels.
 `Covariance` adds up `W diag(var) W.T` for the same operators, one
-variance image per exposure, and normalizes it like the image:
+variance image per exposure, and gives the covariance of the image
+between each pixel and its neighbors:
 
 ```python
+import numpy as np
 from spizzle import Covariance
 
-cov = Covariance(out_shape, radius=2)
+cov = Covariance(out_shape)
 for data, var, weights, wcs in exposures:
     ...
     coadd.add(op, data, variances=[var])
     cov.add(op, var)
 
-cov.offsets   # (13, 2): the offsets (dy, dx) kept, half of those within radius
-cov.out_cov   # (13, ny, nx): Cov(image[y, x], image[y + dy, x + dx])
+err = np.sqrt(coadd.out_var[0] * cov.noise_factor)  # for sums over areas
+cov.write_correlation("mosaic_corr.fits")            # optional, separate file
 ```
 
-Pixels farther apart than an input pixel's footprint on the output grid
-are uncorrelated, so `radius = ceil(pixfrac * p * sqrt(2))`, with `p` the
-input pixel size in output pixels, gives the whole covariance.  Checked
-against noise realizations, and for evenly dithered exposures it gives the
-large-area noise correction of Casertano et al. (2000) to about 1%
-(`benchmarks/check_covariance.py`).
+`cov.noise_factor` is, for each pixel, its covariance with all pixels
+over its variance: the variance of a sum over an area much larger than
+an input pixel's footprint is the sum of its pixels' variances times this
+factor.  `sqrt(var * noise_factor)` is therefore the uncertainty for
+aperture photometry and other sums over areas, while `sqrt(var)` stays
+that of a single pixel.  For eight NIRCam exposures at native scale the
+factor has a median of 2.33 and ranges from 1.65 to 3.38 (5 to 95%), where
+the usual single correction (Casertano et al. 2000) is 2.25 everywhere.
+
+`cov.covariance(k)` and `cov.correlation(k)` give the covariance and the
+correlation of each pixel with its neighbor at `cov.offsets[k]`, for half
+of the offsets up to the radius, and `write_correlation` writes all the
+correlation images to a FITS file, one at a time.  Pixels farther apart
+than an input pixel's footprint share no input pixel and are
+uncorrelated; each `Operator` records that distance as `reach`, and by
+default the radius is the reach of the first exposure added.  The sums
+take `2 r (r + 1) + 1` float32 images the size of the output: 13 for
+radius 2 (native scale, pixfrac 1), 1.4 GiB for the NIRCam mosaic above.
+Checked against noise realizations, and for evenly dithered exposures it
+gives Casertano's correction to about 1% (`benchmarks/check_covariance.py`).
 
 The geometry, `build_operator` and `Coadd.add` run on numba's threads;
 set their number with `numba.set_num_threads` or the `NUMBA_NUM_THREADS`

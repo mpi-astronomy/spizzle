@@ -20,8 +20,11 @@ Run from the repository root::
    exposures at random sub-pixel offsets, slightly rotated, are added to
    one `Covariance`, and ``R**2`` is the sum of the covariance over all
    offsets over the variance, averaged over the interior.
-3. With JWST ``cal`` files (and gwcs), the time of `Covariance.add` for
-   one exposure on a mosaic frame enclosing them all.
+3. With JWST ``cal`` files (and gwcs): the exposures, one at a time, onto
+   a mosaic frame enclosing them all, with `Coadd` and a `Covariance` of
+   the total variance (float32, radius from the operators' reach): the
+   time of each step, the noise factor, writing the correlation file, and
+   the peak resident memory.
 """
 
 import argparse
@@ -58,7 +61,7 @@ def monte_carlo(n_real, radius, seed=1):
     op = drizzle_operator(rotated_pixmap(shape, 33.0, 1.6, (80.0, 75.0)), out_shape, pixfrac=0.8,
                           weights=rng.uniform(0.5, 1.5, shape))
     var = rng.uniform(1.0, 4.0, shape)
-    cov = Covariance(out_shape, radius=radius)
+    cov = Covariance(out_shape, radius=radius, dtype=np.float64)
     cov.add(op, var)
     predicted = cov.out_cov
 
@@ -100,7 +103,7 @@ def noise_ratio(pixfrac, s, radius, n_dither=16, seed=2):
     scale = 1.0 / s  # input pixel size in output pixels
     out_n = int(np.ceil(200 * scale * 1.1)) + 8
     out_shape = (out_n, out_n)
-    cov = Covariance(out_shape, radius=radius)
+    cov = Covariance(out_shape, radius=radius, dtype=np.float64)
     for dx, dy in np.random.default_rng(seed).uniform(0.0, 1.0, (n_dither, 2)):
         center = (out_n / 2 + dx * scale, out_n / 2 + dy * scale)
         cov.add(drizzle_operator(rotated_pixmap(shape, 1.3, scale, center), out_shape, pixfrac=pixfrac), np.ones(shape))
@@ -113,7 +116,9 @@ def noise_ratio(pixfrac, s, radius, n_dither=16, seed=2):
     return np.sqrt(total / var)
 
 
-def real_data(files, radius):
+def real_data(files, out_dir):
+    import os
+    import resource
     import sys
     sys.path.insert(0, "benchmarks")
     from compare_jwst import Exposure, output_frame
@@ -121,32 +126,67 @@ def real_data(files, radius):
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        exposures = [Exposure(path, "ivm") for path in files]
-    print(f"\nNIRCam, {len(exposures)} exposures, radius {radius}:\n")
-    print("| frame | output | Covariance.add per exposure | memory of the planes |")
-    print("| --- | ---: | ---: | ---: |")
-    for ratio, pixfrac in [(1.0, 1.0), (0.5, 0.8)]:
-        wcs_out, out_shape = output_frame(exposures, ratio)
-        e = exposures[0]
-        op = drizzle_operator(pixel_map(e.wcs, wcs_out, shape=e.data.shape), out_shape, pixfrac=pixfrac, weights=e.weights)
-        var = sum(e.variances)
-        cov = Covariance(out_shape, radius=radius)
-        cov.add(op, var)
-        times = []
-        for _ in range(3):
-            t0 = time.perf_counter()
-            cov.add(op, var)
-            times.append(time.perf_counter() - t0)
-        size = cov._cnum.nbytes / 2**30
-        print(f"| {ratio}x scale, pixfrac {pixfrac} | {out_shape[0]}x{out_shape[1]} | {min(times):.3f} s | {size:.1f} GiB |")
-        del cov, op
+        # the output frame needs every footprint, not the pixels
+        frames = []
+        for path in files:
+            e = Exposure(path, "ivm")
+            e.data = np.broadcast_to(0.0, e.data.shape)
+            e.variances = e.weights = None
+            frames.append(e)
+        wcs_out, out_shape = output_frame(frames, 1.0)
+        del frames
+
+        coadd = Coadd(out_shape, n_var=3)
+        cov = Covariance(out_shape)
+        steps = dict.fromkeys(["read", "pixel_map", "drizzle_operator", "Coadd.add", "Covariance.add"], 0.0)
+        for path in files:
+            t = [time.perf_counter()]
+            e = Exposure(path, "ivm")
+            t.append(time.perf_counter())
+            pixmap = pixel_map(e.wcs, wcs_out, shape=e.data.shape)
+            t.append(time.perf_counter())
+            op = drizzle_operator(pixmap, out_shape, pixfrac=1.0, weights=e.weights)
+            t.append(time.perf_counter())
+            coadd.add(op, e.data, e.variances)
+            t.append(time.perf_counter())
+            cov.add(op, sum(e.variances))
+            t.append(time.perf_counter())
+            for step, t0, t1 in zip(steps, t[:-1], t[1:]):
+                steps[step] += t1 - t0
+            del e, pixmap, op
+
+    t0 = time.perf_counter()
+    factor = cov.noise_factor
+    t_factor = time.perf_counter() - t0
+    path = os.path.join(out_dir, "correlation.fits")
+    t0 = time.perf_counter()
+    cov.write_correlation(path, overwrite=True)
+    t_write = time.perf_counter() - t0
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (2**30 if sys.platform == "darwin" else 2**20)
+
+    n_px = out_shape[0] * out_shape[1]
+    print(f"\nNIRCam, {len(files)} exposures one at a time onto {out_shape[0]}x{out_shape[1]} "
+          f"({n_px / 2048**2:.1f} exposures' area), native scale, pixfrac 1, radius {cov.radius} from the reach:\n")
+    print("| step | total |")
+    print("| --- | ---: |")
+    for step, total in steps.items():
+        print(f"| {step} | {total:.2f} s |")
+    print(f"| noise_factor | {t_factor:.2f} s |")
+    print(f"| write_correlation ({os.path.getsize(path) / 2**30:.2f} GiB) | {t_write:.2f} s |")
+    weighted = np.isfinite(factor)
+    cov_bytes = cov._cnum.nbytes + cov._wsum.nbytes
+    print(f"\nsums: Coadd {(5 * 8 + 4) * n_px / 2**30:.2f} GiB, Covariance {cov_bytes / 2**30:.2f} GiB (float32); "
+          f"peak resident memory {peak:.2f} GiB")
+    print(f"noise factor over the {weighted.sum()} pixels with weight: median {np.median(factor[weighted]):.3f}, "
+          f"5% {np.percentile(factor[weighted], 5):.3f}, 95% {np.percentile(factor[weighted], 95):.3f}")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     parser.add_argument("files", nargs="*", help="JWST cal files for the timing")
     parser.add_argument("--realizations", type=int, default=4000)
-    parser.add_argument("--radius", type=int, default=2)
+    parser.add_argument("--radius", type=int, default=2, help="radius of the Monte Carlo check")
+    parser.add_argument("--out-dir", default=".", help="where to write correlation.fits for the JWST files")
     args = parser.parse_args()
 
     monte_carlo(args.realizations, args.radius)
@@ -160,7 +200,7 @@ def main():
             print(f"| {pixfrac} | {s} | {r:.3f} | {noise_ratio(pixfrac, s, radius=4):.4f} | {casertano(r):.4f} |", flush=True)
 
     if args.files:
-        real_data(args.files, args.radius)
+        real_data(args.files, args.out_dir)
 
 
 if __name__ == "__main__":

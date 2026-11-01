@@ -27,7 +27,16 @@ First release.
   on several threads.
 - `Covariance`: the covariance between nearby pixels of the co-added
   image, for independent input noise, as one image per pixel offset up
-  to a radius; its zero offset equals `Coadd.out_var` bit for bit.
+  to a radius, by default the reach of the operators, and summed in
+  float32 unless asked for float64; in float64 its zero offset equals
+  `Coadd.out_var` bit for bit.  `noise_factor` gives each pixel's
+  covariance with all pixels over its variance, the per-pixel correction
+  for the noise of sums over areas; `correlation` the correlation with a
+  neighbor; and `write_correlation` writes all correlation images to a
+  separate FITS file (needs astropy).
+- `Operator.reach`: the largest distance in y or x between two output
+  pixels that share an input pixel, beyond which drizzled noise is
+  uncorrelated.
 - `Coadd`: the weighted mean of exposures on one output grid, with any
   number of variance planes and drizzle's context image, summed in
   float64 and divided once at the end.

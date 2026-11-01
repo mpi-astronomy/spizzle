@@ -57,11 +57,16 @@ class Operator:
         the output grid.
     out_shape : tuple of int
         ``(ny_out, nx_out)``.
+    reach : int or None
+        Largest distance in y or in x, in output pixels, between two output
+        pixels that share an input pixel: drizzled noise is uncorrelated
+        beyond it (see `Covariance`).  None if not known.
     """
 
     matrix: sparse.csr_array
     box: tuple
     out_shape: tuple
+    reach: int = None
 
     @property
     def box_shape(self):
@@ -123,10 +128,14 @@ def build_operator(triplets, jaco, out_shape, weights=None, weight_scale=1.0):
     # the entries of each output pixel stay in input pixel order
     n_chunks = max(1, min(4 * numba.get_num_threads(), in_idx.size))
     chunk_starts = np.linspace(0, in_idx.size, n_chunks + 1).astype(np.int64)
+    # start each chunk at the first triplet of an input pixel, so that every
+    # input pixel's footprint is in one chunk
+    chunk_starts[1:-1] = np.searchsorted(in_idx, in_idx[chunk_starts[1:-1]], side="left")
     counts = np.zeros((n_chunks, ny_out), dtype=np.int64)
     col_min = np.empty(n_chunks, dtype=np.int64)
     col_max = np.empty(n_chunks, dtype=np.int64)
-    _count_rows(in_idx, out_idx, area, w, nx_out, chunk_starts, counts, col_min, col_max)
+    reach = np.zeros(n_chunks, dtype=np.int64)
+    _count_rows(in_idx, out_idx, area, w, nx_out, chunk_starts, counts, col_min, col_max, reach)
     rows = np.flatnonzero(counts.sum(axis=0))
     if rows.size:
         y0, y1, x0, x1 = int(rows[0]), int(rows[-1]) + 1, int(col_min.min()), int(col_max.max()) + 1
@@ -151,7 +160,7 @@ def build_operator(triplets, jaco, out_shape, weights=None, weight_scale=1.0):
     matrix = sparse.csr_array((data, indices, indptr), shape=(box_ny * box_nx, jaco.size))
     # each output pixel's entries are in input pixel order, so scipy need not check
     matrix.has_sorted_indices = True
-    return Operator(matrix, (slice(y0, y1), slice(x0, x1)), (ny_out, nx_out))
+    return Operator(matrix, (slice(y0, y1), slice(x0, x1)), (ny_out, nx_out), int(reach.max()))
 
 
 def drizzle_operator(pixmap, out_shape, pixfrac=1.0, weights=None, weight_scale=1.0):
@@ -301,8 +310,8 @@ def _box_rows(W, out_shape, n_in):
 
 
 @numba.njit(parallel=True, cache=True, error_model="numpy")
-def _count_rows(in_idx, out_idx, area, w, nx_out, chunk_starts, counts, col_min, col_max):
-    """Count the non-zero entries of each chunk of triplets in each output row, and find their column range.
+def _count_rows(in_idx, out_idx, area, w, nx_out, chunk_starts, counts, col_min, col_max, reach):
+    """Count the non-zero entries of each chunk of triplets in each output row, and find their column range and reach.
 
     Parameters
     ----------
@@ -318,10 +327,17 @@ def _count_rows(in_idx, out_idx, area, w, nx_out, chunk_starts, counts, col_min,
     col_min, col_max : ndarray of int64, shape (n_chunks,)
         Set to the smallest and largest output column of each chunk's
         non-zero entries; ``nx_out`` and -1 for a chunk without any.
+    reach : ndarray of int64, shape (n_chunks,)
+        Set to the largest extent, rows or columns minus one, of the
+        non-zero entries of one input pixel in the chunk.  Each input
+        pixel's triplets must be consecutive and in one chunk.
     """
     for c in numba.prange(chunk_starts.size - 1):
         lo = nx_out
         hi = -1
+        far = 0
+        pixel = -1
+        rlo = rhi = clo = chi = 0
         for k in range(chunk_starts[c], chunk_starts[c + 1]):
             if area[k] * w[in_idx[k]] != 0.0:
                 row = out_idx[k] // nx_out
@@ -329,8 +345,19 @@ def _count_rows(in_idx, out_idx, area, w, nx_out, chunk_starts, counts, col_min,
                 counts[c, row] += 1
                 lo = min(lo, col)
                 hi = max(hi, col)
+                if in_idx[k] != pixel:
+                    far = max(far, rhi - rlo, chi - clo)
+                    pixel = in_idx[k]
+                    rlo = rhi = row
+                    clo = chi = col
+                else:
+                    rlo = min(rlo, row)
+                    rhi = max(rhi, row)
+                    clo = min(clo, col)
+                    chi = max(chi, col)
         col_min[c] = lo
         col_max[c] = hi
+        reach[c] = max(far, rhi - rlo, chi - clo)
 
 
 @numba.njit(parallel=True, cache=True, error_model="numpy")
