@@ -23,6 +23,8 @@ First release.
   output frame; drizzle skips input pixels centred outside the frame.
 - `benchmarks/bench_spizzle.py`: timings and peak memory against
   drizzle's C square kernel.
+- `benchmarks/compare_jwst.py`: drizzles JWST `cal` or `crf` files with
+  drizzle and spizzle, compares the outputs and times both.
 - Tests against drizzle with float64 output arrays: single-pixel
   operator columns, weights, science and variance for several `pixfrac`,
   rotations, scales, a mirrored input, NaN pixels of zero weight,

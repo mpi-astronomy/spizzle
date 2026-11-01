@@ -165,11 +165,11 @@ class Coadd:
         if plane == len(self._ctx):
             self._ctx.append(np.zeros(self._num.size, dtype=np.int32))
         mask = np.uint32(1 << bit).view(np.int32)
-        _add_data(W.indptr, W.indices, W.data, data.ravel() * iscale, self._num, self._wsum, self._ctx[plane], mask)
-        iscale2 = iscale * iscale
+        _add_data(W.indptr, W.indices, W.data, data.ravel(), iscale, self._num, self._wsum, self._ctx[plane], mask)
         for vnum, var in zip(self._vnum, variances):
             if var is not None:
-                _add_variance(W.indptr, W.indices, W.data, np.asarray(var, dtype=np.float64).ravel() * iscale2, vnum)
+                var = np.asarray(var, dtype=np.float64).ravel()
+                _add_variance(W.indptr, W.indices, W.data, var, iscale * iscale, vnum)
         self.n_images += 1
 
     @property
@@ -281,27 +281,31 @@ def _sort_rows(row_starts, nx_out, row_cols, row_ins, row_values, indptr, indice
 
 
 @numba.njit(parallel=True, cache=True, error_model="numpy")
-def _add_data(indptr, indices, values, data, num, wsum, ctx, mask):
-    """Add ``W @ data`` to num and ``W @ 1`` to wsum, and set ``mask`` in ctx where a row of W has a positive entry.
+def _add_data(indptr, indices, values, data, iscale, num, wsum, ctx, mask):
+    """Add ``W @ (data * iscale)`` to num and ``W @ 1`` to wsum, and set ``mask`` in ctx where a row of W has a positive entry.
 
-    drizzle sets the context bit for any positive contribution.
+    drizzle sets the context bit for any positive contribution.  Rows
+    without entries are left alone.
 
     Parameters
     ----------
     indptr, indices, values : ndarray
         CSR arrays of W.
     data : ndarray, shape (n_in,)
+    iscale : float
     num, wsum : ndarray of float64, shape (n_out,)
     ctx : ndarray of int32, shape (n_out,)
     mask : int32
     """
     for row in numba.prange(indptr.size - 1):
+        if indptr[row] == indptr[row + 1]:
+            continue
         s = 0.0
         sw = 0.0
         hit = False
         for k in range(indptr[row], indptr[row + 1]):
             w = values[k]
-            s += w * data[indices[k]]
+            s += w * (data[indices[k]] * iscale)
             sw += w
             hit |= w > 0.0
         num[row] += s
@@ -311,19 +315,22 @@ def _add_data(indptr, indices, values, data, num, wsum, ctx, mask):
 
 
 @numba.njit(parallel=True, cache=True, error_model="numpy")
-def _add_variance(indptr, indices, values, var, vnum):
-    """Add ``(W * W) @ var`` to vnum.
+def _add_variance(indptr, indices, values, var, iscale2, vnum):
+    """Add ``(W * W) @ (var * iscale2)`` to vnum; rows without entries are left alone.
 
     Parameters
     ----------
     indptr, indices, values : ndarray
         CSR arrays of W.
     var : ndarray, shape (n_in,)
+    iscale2 : float
     vnum : ndarray of float64, shape (n_out,)
     """
     for row in numba.prange(indptr.size - 1):
+        if indptr[row] == indptr[row + 1]:
+            continue
         s = 0.0
         for k in range(indptr[row], indptr[row + 1]):
             w = values[k]
-            s += w * w * var[indices[k]]
+            s += w * w * (var[indices[k]] * iscale2)
         vnum[row] += s

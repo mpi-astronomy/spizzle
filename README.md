@@ -52,12 +52,19 @@ The differences:
 `benchmarks/bench_spizzle.py` times spizzle against drizzle's C kernel.
 On an Apple M3 Pro (11 threads), for a 2048x2048 exposure drizzled at 2x
 oversampling with `pixfrac=0.8`, building `W` takes 0.26 s and
-`Coadd.add` about 0.02 s per plane.  The science data with three variance
-planes take 0.32 s, against 0.72 s for drizzle with the variance planes in
+`Coadd.add` about 0.012 s per plane.  The science data with three variance
+planes take 0.30 s, against 0.72 s for drizzle with the variance planes in
 the same call; each further pass over the same geometry, such as a noise
-realisation, costs about 0.02 s, against 0.56 s for a drizzle call.  On a
+realisation, costs about 0.015 s, against 0.56 s for a drizzle call.  On a
 single thread spizzle is slower than drizzle.  The peak memory is higher:
 3.0 GiB for the exposure with three variance planes, against 1.25 GiB.
+
+`benchmarks/compare_jwst.py` drizzles a set of JWST exposures with both
+packages and compares the results.  For eight NIRCam long-wavelength
+exposures on a common mosaic frame the two agree to better than 2e-12
+(most pixels better than 1e-15) against drizzle computing in float64, and
+spizzle takes 0.26 s per exposure against drizzle's 0.42 s; computing the
+pixel map with gwcs takes 0.73 s.
 
 
 # Installation

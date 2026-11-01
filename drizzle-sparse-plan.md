@@ -1,8 +1,8 @@
 # Plan: faster, float64, parallel drizzle via an explicit sparse operator
 
-**Status:** milestone steps 1-2 done (`fc5db6d`); step 3 done: baseline in
-§8.1, after the speed-up of the operator build and apply in §8.2; step 4
-(A vs B, the B.1 PR) open
+**Status:** first milestone done: steps 1-2 in `fc5db6d`, step 3 (benchmarks)
+in §8.1 and §8.2, step 4 (A vs B) decided in §6. Real-data check (§7.4)
+done, results in §7.1
 **Context date:** 2026-11-01
 **Reference code:** `spacetelescope/drizzle` `main` @ `59ff6a1` (2026-10-28)
 
@@ -150,6 +150,16 @@ Two options; pick after the numba prototype works.
 
 Start with A; carry (B.1) as an independent PR regardless.
 
+**Decision, 2026-11-01:** A. spizzle stays a separate package
+(mpi-astronomy/spizzle). B.1 is half done in the jdavies-st/drizzle float64
+series (`float64-phase1-compute-double`, `float64-phase2-c-accepts-float64`:
+double arithmetic and float64 output arrays); the deferred normalisation
+(sum, then divide once after the last `add_image`) becomes its next phase.
+B.2 is dropped: the numba port of `boxer`/`sgarea` matches drizzle bit for
+bit (built with `-ffp-contract=off`) and runs in parallel, so a C entry
+point would add nothing. The problems in `drizzle-issues.md` go upstream
+as separate PRs.
+
 ## 7. Validation
 
 1. **Bit-for-bit geometry:** `overlap_triplets` vs. a tiny C shim around
@@ -165,6 +175,58 @@ Start with A; carry (B.1) as an independent PR regardless.
    science, weight and variance planes; histogram of relative differences.
 5. **Variance plane:** confirm `vnum/wsum²` matches `drizzle`'s `data2`
    output.
+
+### 7.1 Real data, 2026-11-01
+
+`python benchmarks/compare_jwst.py` on the 8 NIRCam `nrcalong` F277W
+exposures of program 6154 observation 1 (`~/data/jwst_6154/reduction_mast`,
+MAST reduction with jwst 1.17.1), read with gwcs 1.0.3 alone (no jwst).
+All 8 go onto one north-up TAN frame enclosing them, by drizzle
+(`tdriz`, float32 and float64 outputs) and by spizzle, from the same
+`drizzle.utils.calc_pixmap` pixel maps, the image3 default weights
+(`ivm`: 1/VAR_RNOISE, zero where DQ has DO_NOT_USE or NON_SCIENCE) and
+the VAR_POISSON, VAR_RNOISE and VAR_FLAT planes. Same machine as §8.
+
+Agreement, relative to `max(|drizzle|, median |drizzle|)` over the pixels
+with weight:
+
+| frame | output pixels with weight | sci | wht | variance planes |
+| --- | ---: | ---: | ---: | ---: |
+| native scale, `pixfrac=1`, `cal` | 13.76 M | 4.6e-13 | 8.2e-16 | 4.4e-13 |
+| native scale, `pixfrac=1`, `crf` | 13.76 M | 5.3e-14 | 8.2e-16 | 4.2e-13 |
+| 2× oversampled, `pixfrac=0.8`, `cal` | 54.95 M | 1.5e-13 | 8.9e-16 | 1.6e-12 |
+
+These are maxima against drizzle with float64 outputs; ~99.99% of pixels
+differ by less than 1e-15. Both packages give weight to the same pixels,
+NaN in the same pixels, and the same context image. Against drizzle with
+float32 outputs (released drizzle) the differences are 1e-9 to 4.9e-7,
+float32 round-off. Flux, Σ(sci·wht) / Σ(data·weight): spizzle and float64
+drizzle 1 to 15 digits, float32 drizzle off by 4e-11.
+
+Time per exposure, minimum of 3 passes:
+
+| step | native, 5579×4380 | 2× oversampled, 11152×8755 |
+| --- | ---: | ---: |
+| pixel map (gwcs, `calc_pixmap`) | 0.73 s | 0.72 s |
+| spizzle `drizzle_operator` | 0.19 s | 0.39 s |
+| spizzle `Coadd.add`, science + 3 variance planes | 0.06 s | 0.14 s |
+| drizzle `tdriz`, science + 3 variance planes (f32 or f64) | 0.42 s | 0.68 s |
+
+Findings:
+
+- spizzle is 1.65× faster than drizzle per exposure at native scale and
+  1.3× at 2× oversampling. Counting the pixel map, which both need, an
+  exposure takes 0.99 s against 1.15 s (native): gwcs evaluation is
+  now the largest cost, as §8 expected.
+- The operator and `Coadd.add` work on every row of `W`, i.e. every
+  output pixel, though one exposure lands on a fraction of a mosaic (4.2 M
+  of 24.4 M pixels at native scale). Limiting `W` to the exposure's
+  bounding box on the output grid measured 0.27 + 0.06 s instead of
+  0.31 + 0.14 s at 2× (one exposure, repeated), and `indptr` 215 MiB
+  instead of 745 MiB. See §9.
+- With all three packages' 2× outputs in memory (~11 GB of the 18 GB),
+  timings rose up to 3× from memory pressure. The script now times each
+  package with only its own outputs in memory.
 
 ## 8. Benchmarks to record
 
@@ -267,6 +329,11 @@ Same benchmark, machine and versions as §8.1. Changes:
 Peak resident memory with 3 variance planes: spizzle 2.96 GiB (baseline
 3.56), drizzle 1.25 GiB (f32) and 1.66 GiB (f64).
 
+With the later change to `Coadd.add` from §7.1 (scaling inside the
+kernels instead of copying each plane, skipping rows without entries),
+`Coadd.add` takes 0.014 / 0.048 / 0.097 / 0.189 s for 1 / 4 / 8 / 16
+planes.
+
 Findings:
 
 - Goal 3 is met on this machine: 2.3× faster than drizzle for the
@@ -294,12 +361,14 @@ Findings:
 - The CSR `indptr` has one int64 per output pixel, so on a large mosaic
   each exposure's `W` costs 8 bytes per output pixel even where the
   exposure does not land. Restricting `W` to the exposure's bounding box
-  on the output grid would avoid that.
+  on the output grid would avoid that. Measured on real data in §7.1:
+  operator plus `add` 30% faster at 2× oversampling, `indptr` 3.5× smaller.
+  It changes the API: `W` then needs the box's offset and shape with it.
 - `numba` `parallel=True` with dynamic per-row buffers: may need a two-pass
   (count, then fill) scheme for predictable allocation.
 - Rounding helper `nintd` and bounding-box clipping must match the C exactly
   or edge pixels will differ.
-- Whether upstream wants (B.2); open an issue early to gauge interest.
+- ~~Whether upstream wants (B.2)~~: dropped, see §6.
 - gwcs evaluation cost for corner grids (4× the pixel-centre evaluations) —
   reuse `pixmap` interpolation initially, profile later.
 
