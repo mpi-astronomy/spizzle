@@ -9,10 +9,10 @@ done, results in §7.1
 ## 1. Problem statement
 
 `jwst.resample.ResampleStep` is backed by the `drizzle` package. Its C kernel
-(`src/cdrizzlebox.c`) is single-threaded, stores and re-normalises output
+(`src/cdrizzlebox.c`) is single-threaded, stores and re-normalizes output
 pixels in float32 on every contribution, and recomputes the input→output
 pixel-overlap geometry for every data plane pushed through it (science, each
-variance plane, every blot/outlier-detection iteration, any noise realisations).
+variance plane, every blot/outlier-detection iteration, any noise realizations).
 
 Drizzle is a linear map `y = W x`, where `W` is sparse (~4–9 non-zeros per
 input pixel) and depends only on the WCS pair, `pixfrac`, output grid and input
@@ -26,7 +26,7 @@ derived.
 
 1. Numerically identical (to float64 round-off) science/weight output to
    `drizzle` square kernel for the same inputs.
-2. Float64 accumulation; one normalisation at the end.
+2. Float64 accumulation; one normalization at the end.
 3. Wall-clock speed-up when ≥2 planes share geometry; multithreaded geometry
    build.
 4. Expose `W` (or its per-exposure pieces) so covariance / noise-propagation
@@ -66,7 +66,7 @@ Key facts for the rewrite:
 - All geometry is already double precision. The float32 loss is purely from the
   running-mean update in `update_data_var`.
 - `boxer`/`sgarea` is the only piece that genuinely resists numpy
-  vectorisation (branches on clipping). Everything else is array arithmetic.
+  vectorization (branches on clipping). Everything else is array arithmetic.
 
 ## 5. Proposed architecture
 
@@ -79,7 +79,7 @@ build_operator(triplets, weights, jaco)    # scipy.sparse CSR, shape (n_out, n_i
     │
 apply(W, planes)                           # W @ sci, W @ ones, (W∘W) @ var, ...
     │
-accumulate across exposures in float64; normalise once at end
+accumulate across exposures in float64; normalize once at end
 ```
 
 ### 5.1 `corners`
@@ -139,8 +139,8 @@ Two options; pick after the numba prototype works.
 
 **B. Branch of a `drizzle` fork**
 - Natural home for two upstreamable pieces once proven:
-  1. float64 accumulation + deferred normalisation in `update_data_var`
-     (change output array dtype, remove per-hit division, normalise in Python
+  1. float64 accumulation + deferred normalization in `update_data_var`
+     (change output array dtype, remove per-hit division, normalize in Python
      after the last `add_image`). Small, self-contained, likely acceptable
      upstream.
   2. A new C entry point `boxer_grid(corners, out_shape) -> triplets`
@@ -153,7 +153,7 @@ Start with A; carry (B.1) as an independent PR regardless.
 **Decision, 2026-11-01:** A. spizzle stays a separate package
 (mpi-astronomy/spizzle). B.1 is half done in the jdavies-st/drizzle float64
 series (`float64-phase1-compute-double`, `float64-phase2-c-accepts-float64`:
-double arithmetic and float64 output arrays); the deferred normalisation
+double arithmetic and float64 output arrays); the deferred normalization
 (sum, then divide once after the last `add_image`) becomes its next phase.
 B.2 is dropped: the numba port of `boxer`/`sgarea` matches drizzle bit for
 bit (built with `-ffp-contract=off`) and runs in parallel, so a C entry
@@ -306,7 +306,7 @@ Same benchmark, machine and versions as §8.1. Changes:
   into its accumulators without temporary arrays or `W∘W`.
 - CSR was kept, although CSC needs no sort: the parallel CSR build costs
   0.10 s, and a parallel apply needs CSR rows (gathers); applying a CSC
-  array scatters, which does not parallelise without write conflicts.
+  array scatters, which does not parallelize without write conflicts.
   Serial CSC apply measured 0.32 s for 4 planes against 0.06 s for the
   parallel CSR one.
 
@@ -363,13 +363,13 @@ Findings:
   exposure does not land. Restricting `W` to the exposure's bounding box
   on the output grid would avoid that. Measured on real data in §7.1:
   operator plus `add` 30% faster at 2× oversampling, `indptr` 3.5× smaller.
-  It changes the API: `W` then needs the box's offset and shape with it.
+  Done: `Operator`, see §11.
 - `numba` `parallel=True` with dynamic per-row buffers: may need a two-pass
   (count, then fill) scheme for predictable allocation.
 - Rounding helper `nintd` and bounding-box clipping must match the C exactly
   or edge pixels will differ.
 - ~~Whether upstream wants (B.2)~~: dropped, see §6.
-- gwcs evaluation cost for corner grids (4× the pixel-centre evaluations) —
+- gwcs evaluation cost for corner grids (4× the pixel-center evaluations) —
   reuse `pixmap` interpolation initially, profile later.
 
 ## 10. Suggested first milestone (≈1–2 days)
@@ -379,3 +379,67 @@ Findings:
 2. Tests 7.1–7.3 passing.
 3. Benchmark table for §8 on synthetic data.
 4. Decide A vs B and whether to open the (B.1) PR.
+
+## 11. Next steps (after the first milestone)
+
+1. **Bounding-box `W`** (§9, measured in §7.1): build each exposure's
+   operator on its bounding box on the output grid instead of the whole
+   frame, so that the CSR `indptr`, the row sort and `Coadd.add` scale
+   with the exposure, not with the mosaic.
+
+   Done, 2026-11-01. `drizzle_operator` and `build_operator` return an
+   `Operator`: `matrix`, the CSR array on the box (one row per box
+   pixel), `box`, a pair of slices into the output grid (the smallest box
+   that holds every non-zero entry), `out_shape`, and `full()` for the
+   CSR array on the whole grid, which shares the indices and values.
+   `Coadd.add` takes an `Operator` or a sparse array on the whole grid.
+   `overlap_triplets` is unchanged; `build_operator` finds the box while
+   it counts the entries per output row. `full()` and the `Coadd` outputs
+   are bit-identical to the whole-grid version.
+
+   Measured with old and new in one process, alternating (min per
+   exposure):
+
+   | case | `drizzle_operator` | `Coadd.add`, 4 planes |
+   | --- | ---: | ---: |
+   | real, native mosaic 5579×4380 (8 exposures) | 0.201 → 0.190 s | 0.062 → 0.036 s |
+   | real, 2× mosaic 11152×8755, one exposure repeated | 0.311 → 0.267 s | 0.137 → 0.057 s |
+   | synthetic §8, box ≈ whole frame | 0.287 → 0.297 s | 0.050 → 0.054 s |
+
+   At native scale spizzle now takes 0.23 s per exposure against
+   drizzle's 0.43 s (1.9×). `indptr` of the 2× exposure: 745 → 215 MiB.
+   When the box is nearly the whole frame the change costs ~3-7%: the
+   column range found while counting. A first version that mapped box
+   rows to output pixels with an integer division per row made
+   `Coadd.add` 30% slower there; the kernels now loop over the box's rows
+   and columns instead.
+2. **Faster pixel maps.** Think about whether the gwcs pixel map can be
+   made faster: at 0.73-0.81 s per NIRCam exposure it now costs more
+   than drizzling (§7.1), for drizzle and spizzle alike. Profile of one
+   `drizzle.utils.calc_pixmap` call (`nrcalong`, 2048², native-scale
+   TAN output frame, 0.81 s):
+   - input `pixel_to_world_values` 0.56 s: the four distortion
+     polynomials (`multivariate_horner`) 0.26 s, gwcs spherical/Cartesian
+     conversions 0.14 s, bounding-box handling 0.06 s, polynomial domain
+     mapping 0.04 s;
+   - output `world_to_pixel_values` (astropy.wcs TAN) 0.19 s;
+   - all of it single-threaded numpy.
+
+   Ideas to weigh, roughly from least to most invasive:
+   - evaluate in row blocks on several threads: numpy releases the GIL
+     in its array operations, the results are elementwise and so
+     identical, and nothing changes for the caller;
+   - compute each pixel map once and reuse it in resample, outlier
+     detection and blot, which in jwst each evaluate the WCS again;
+   - skip the bounding-box machinery when the whole detector is inside
+     it;
+   - evaluate on a coarse grid (every 8th-32nd pixel) and interpolate:
+     the distortion is smooth, but the pixel map then differs slightly
+     from the pipeline's, so the interpolation error needs a bound
+     (well below 1e-3 pixel) and a test against the full evaluation;
+   - compile the transform (numba) for the model types NIRCam imaging
+     uses; fast, but tied to one transform structure.
+
+   Whatever helps belongs upstream (drizzle's `calc_pixmap`, gwcs or
+   astropy.modeling) rather than in spizzle, which takes the pixel map
+   as input.

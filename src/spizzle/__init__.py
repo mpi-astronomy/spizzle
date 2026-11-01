@@ -1,7 +1,7 @@
 from importlib.metadata import version, PackageNotFoundError
 
 from .geometry import corners, jacobian, overlap_triplets
-from .operator import build_operator, drizzle_operator, Coadd
+from .operator import build_operator, drizzle_operator, Operator, Coadd
 
 
 try:
@@ -17,5 +17,6 @@ __all__ = [
     'overlap_triplets',
     'build_operator',
     'drizzle_operator',
+    'Operator',
     'Coadd',
 ]

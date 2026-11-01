@@ -274,7 +274,7 @@ def main():
                 parser.error(f"baseline was run with --{key} {baseline['meta'][key]}")
 
     inputs = Inputs(args.size, args.oversample, nvar=max(args.planes) - 1)
-    W = drizzle_operator(inputs.pixmap, inputs.out_shape, pixfrac=args.pixfrac, weights=inputs.weights)
+    W = drizzle_operator(inputs.pixmap, inputs.out_shape, pixfrac=args.pixfrac, weights=inputs.weights).matrix
     nnz = W.nnz
     W_bytes = W.data.nbytes + W.indices.nbytes + W.indptr.nbytes
     del W

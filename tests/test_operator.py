@@ -12,14 +12,14 @@ def identity_pixmap(shape):
     return np.dstack([x, y])
 
 
-def rotated_pixmap(shape, degrees, scale, centre):
-    """Pixel map of an input rotated by ``degrees`` and scaled by ``scale``, its centre at ``centre`` (x, y)."""
+def rotated_pixmap(shape, degrees, scale, center):
+    """Pixel map of an input rotated by ``degrees`` and scaled by ``scale``, its center at ``center`` (x, y)."""
     t = np.deg2rad(degrees)
     y, x = np.indices(shape, dtype=np.float64)
     xc = x - shape[1] / 2
     yc = y - shape[0] / 2
-    xo = scale * (np.cos(t) * xc - np.sin(t) * yc) + centre[0]
-    yo = scale * (np.sin(t) * xc + np.cos(t) * yc) + centre[1]
+    xo = scale * (np.cos(t) * xc - np.sin(t) * yc) + center[0]
+    yo = scale * (np.sin(t) * xc + np.cos(t) * yc) + center[1]
     return np.dstack([xo, yo])
 
 
@@ -37,8 +37,8 @@ def scipy_operator(triplets, jaco, out_shape, weights):
 
 
 def test_drizzle_operator_of_identity_pixmap():
-    """drizzle_operator of a 5x6 identity pixel map without weights is the 30x30 identity matrix."""
-    W = drizzle_operator(identity_pixmap((5, 6)), (5, 6))
+    """drizzle_operator of a 5x6 identity pixel map without weights is, on the whole grid, the 30x30 identity matrix."""
+    W = drizzle_operator(identity_pixmap((5, 6)), (5, 6)).full()
 
     np.testing.assert_array_equal(W.toarray(), np.eye(30))
 
@@ -47,14 +47,14 @@ def test_drizzle_operator_puts_weights_on_the_diagonal():
     """drizzle_operator of a 5x6 identity pixel map with weights has the weights on its diagonal."""
     weights = random_image((5, 6), 0.5, 1.5, seed=1)
 
-    W = drizzle_operator(identity_pixmap((5, 6)), (5, 6), weights=weights)
+    W = drizzle_operator(identity_pixmap((5, 6)), (5, 6), weights=weights).full()
 
     np.testing.assert_array_equal(W.toarray(), np.diag(weights.ravel()))
 
 
 def test_drizzle_operator_applies_weight_scale():
     """drizzle_operator of a 5x6 identity pixel map with weight_scale 0.25 has 0.25 on its diagonal."""
-    W = drizzle_operator(identity_pixmap((5, 6)), (5, 6), weight_scale=0.25)
+    W = drizzle_operator(identity_pixmap((5, 6)), (5, 6), weight_scale=0.25).full()
 
     np.testing.assert_array_equal(W.toarray(), 0.25 * np.eye(30))
 
@@ -65,9 +65,58 @@ def test_drizzle_operator_leaves_out_zero_weights():
     weights[1, 2:4] = 0.0
     weights[3, 0:2] = 0.0
 
-    W = drizzle_operator(identity_pixmap((5, 6)), (5, 6), weights=weights)
+    op = drizzle_operator(identity_pixmap((5, 6)), (5, 6), weights=weights)
 
-    assert W.nnz == 26
+    assert op.matrix.nnz == 26
+
+
+def test_drizzle_operator_box_of_shifted_input():
+    """drizzle_operator of a 5x6 identity pixel map shifted by (+3, +2) onto a 12x14 output has box rows 2-6, columns 3-8."""
+    op = drizzle_operator(identity_pixmap((5, 6)) + [3.0, 2.0], (12, 14))
+
+    assert op.box == (slice(2, 7), slice(3, 9))
+
+
+def test_drizzle_operator_box_shape_of_shifted_input():
+    """drizzle_operator of a 5x6 identity pixel map shifted by (+3, +2) onto a 12x14 output has box_shape (5, 6)."""
+    op = drizzle_operator(identity_pixmap((5, 6)) + [3.0, 2.0], (12, 14))
+
+    assert op.box_shape == (5, 6)
+
+
+def test_drizzle_operator_matrix_of_shifted_input():
+    """drizzle_operator of a 5x6 identity pixel map shifted by (+3, +2) onto a 12x14 output has the identity on its box."""
+    op = drizzle_operator(identity_pixmap((5, 6)) + [3.0, 2.0], (12, 14))
+
+    np.testing.assert_array_equal(op.matrix.toarray(), np.eye(30))
+
+
+def test_operator_full_of_shifted_input():
+    """Operator.full of a 5x6 identity pixel map shifted by (+3, +2) onto 12x14 maps input (y, x) to output (y + 2, x + 3)."""
+    y, x = np.indices((5, 6))
+    expected = np.zeros((12 * 14, 30))
+    expected[((y + 2) * 14 + x + 3).ravel(), np.arange(30)] = 1.0
+
+    op = drizzle_operator(identity_pixmap((5, 6)) + [3.0, 2.0], (12, 14))
+
+    np.testing.assert_array_equal(op.full().toarray(), expected)
+
+
+def test_drizzle_operator_box_leaves_out_columns_of_zero_weight():
+    """drizzle_operator of a 5x6 identity pixel map with zero weights in input column 5 has box columns 0-4."""
+    weights = np.ones((5, 6))
+    weights[:, 5] = 0.0
+
+    op = drizzle_operator(identity_pixmap((5, 6)), (5, 6), weights=weights)
+
+    assert op.box == (slice(0, 5), slice(0, 5))
+
+
+def test_drizzle_operator_of_input_outside_output_has_no_rows():
+    """drizzle_operator of an input mapped entirely beyond the output gives a matrix of shape (0, 42)."""
+    op = drizzle_operator(identity_pixmap((6, 7)) + 20.0, (6, 7))
+
+    assert op.matrix.shape == (0, 42)
 
 
 def test_drizzle_operator_rejects_weights_of_another_shape():
@@ -83,7 +132,7 @@ def test_build_operator_matches_scipy():
     weights = random_image((30, 40), 0.5, 1.5, seed=9)
     expected = scipy_operator(triplets, jacobian(c), (100, 110), weights)
 
-    W = build_operator(triplets, jacobian(c), (100, 110), weights=weights)
+    W = build_operator(triplets, jacobian(c), (100, 110), weights=weights).full()
 
     np.testing.assert_array_equal(W.indptr, expected.indptr)
     np.testing.assert_array_equal(W.indices, expected.indices)
@@ -98,7 +147,7 @@ def test_build_operator_with_zero_weights_matches_scipy():
     weights.flat[np.random.default_rng(11).choice(weights.size, 120, replace=False)] = 0.0
     expected = scipy_operator(triplets, jacobian(c), (100, 110), weights)
 
-    W = build_operator(triplets, jacobian(c), (100, 110), weights=weights)
+    W = build_operator(triplets, jacobian(c), (100, 110), weights=weights).full()
 
     np.testing.assert_array_equal(W.indptr, expected.indptr)
     np.testing.assert_array_equal(W.indices, expected.indices)
@@ -109,11 +158,11 @@ def test_build_operator_same_on_one_thread():
     """build_operator of a rotated exposure on one numba thread gives the same CSR arrays as on all threads."""
     c = corners(rotated_pixmap((30, 40), 33.0, 1.6, (55.0, 50.0)), 0.8)
     triplets = overlap_triplets(c, (100, 110))
-    W_all = build_operator(triplets, jacobian(c), (100, 110))
+    W_all = build_operator(triplets, jacobian(c), (100, 110)).full()
 
     numba.set_num_threads(1)
     try:
-        W_one = build_operator(triplets, jacobian(c), (100, 110))
+        W_one = build_operator(triplets, jacobian(c), (100, 110)).full()
     finally:
         numba.set_num_threads(numba.config.NUMBA_NUM_THREADS)
 
@@ -125,12 +174,12 @@ def test_build_operator_same_on_one_thread():
 def test_drizzle_operator_full_weight_at_the_output_edge():
     """drizzle_operator of an input extending 9.7 pixels past the left output edge gives output column 0 weight 1.
 
-    drizzle gives it 0.7, because it skips input pixels centred outside the output frame.
+    drizzle gives it 0.7, because it skips input pixels centered outside the output frame.
     """
     pixmap = identity_pixmap((12, 20))
     pixmap[..., 0] -= 9.7
 
-    W = drizzle_operator(pixmap, (12, 10))
+    W = drizzle_operator(pixmap, (12, 10)).full()
 
     np.testing.assert_allclose((W @ np.ones(240)).reshape(12, 10)[:, 0], np.ones(12), rtol=1e-14)
 
@@ -276,17 +325,47 @@ def test_coadd_context_of_33_exposures_adds_a_plane():
     np.testing.assert_array_equal(coadd.out_ctx[1], np.ones((3, 4), dtype=np.int32))
 
 
+def test_coadd_of_operator_equals_coadd_of_its_full_array():
+    """Coadd.add of a rotated exposure's Operator gives the same out_img as Coadd.add of Operator.full()."""
+    data = random_image((30, 40), 10.0, 20.0, seed=13)
+    op = drizzle_operator(rotated_pixmap((30, 40), 33.0, 1.6, (55.0, 50.0)), (100, 110), pixfrac=0.8)
+    on_box = Coadd((100, 110))
+    on_grid = Coadd((100, 110))
+
+    on_box.add(op, data)
+    on_grid.add(op.full(), data)
+
+    np.testing.assert_array_equal(on_box.out_img, on_grid.out_img)
+
+
 def test_coadd_accepts_csc_operator():
-    """Coadd.add of a rotated exposure's operator as a CSC array gives the same out_img as the CSR array."""
+    """Coadd.add of a rotated exposure's operator as a CSC array on the whole grid gives the same out_img as the Operator."""
     data = random_image((30, 40), 10.0, 20.0, seed=12)
-    W = drizzle_operator(rotated_pixmap((30, 40), 33.0, 1.6, (55.0, 50.0)), (100, 110), pixfrac=0.8)
+    op = drizzle_operator(rotated_pixmap((30, 40), 33.0, 1.6, (55.0, 50.0)), (100, 110), pixfrac=0.8)
     csr = Coadd((100, 110))
     csc = Coadd((100, 110))
 
-    csr.add(W, data)
-    csc.add(sparse.csc_array(W), data)
+    csr.add(op, data)
+    csc.add(sparse.csc_array(op.full()), data)
 
     np.testing.assert_array_equal(csc.out_img, csr.out_img)
+
+
+def test_coadd_of_input_outside_output_adds_no_weight():
+    """Coadd.add of an input mapped entirely beyond the output leaves out_wht zero."""
+    coadd = Coadd((6, 7))
+
+    coadd.add(drizzle_operator(identity_pixmap((6, 7)) + 20.0, (6, 7)), np.ones((6, 7)))
+
+    np.testing.assert_array_equal(coadd.out_wht, np.zeros((6, 7)))
+
+
+def test_coadd_rejects_operator_for_another_output_shape():
+    """Coadd.add on a 5x6 Coadd of an operator built for a 5x7 output raises ValueError."""
+    coadd = Coadd((5, 6))
+
+    with pytest.raises(ValueError, match="output shape"):
+        coadd.add(drizzle_operator(identity_pixmap((5, 6)), (5, 7)), np.ones((5, 6)))
 
 
 def test_coadd_rejects_operator_of_another_shape():

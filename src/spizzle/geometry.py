@@ -1,8 +1,8 @@
 """Overlap geometry of the drizzle square kernel.
 
-Each input pixel, shrunk by ``pixfrac`` about its centre, is mapped to a
+Each input pixel, shrunk by ``pixfrac`` about its center, is mapped to a
 quadrilateral on the output grid by bilinear interpolation of the pixel
-map, which holds the output coordinates of every input pixel centre.  The
+map, which holds the output coordinates of every input pixel center.  The
 area of that quadrilateral inside each output pixel it touches is the
 geometry of the drizzle operator: it depends on the pixel map and
 ``pixfrac`` only, not on the data or the weights.
@@ -12,8 +12,9 @@ geometry of the drizzle operator: it depends on the pixel map and
 spacetelescope/drizzle, with the same corner order and the same order of
 floating point operations, and `overlap_triplets` runs drizzle's ``boxer``
 and ``sgarea`` over every input pixel.  All three are compiled with numba
-and run in parallel over input rows.  Unlike drizzle, which visits only the input pixels whose
-centres fall inside the output frame, every input pixel with finite
+and run in parallel over input rows.  Unlike drizzle, which visits only the
+input pixels whose
+centers fall inside the output frame, every input pixel with finite
 corners is visited, so output pixels at the edges get all of their
 overlap.
 
@@ -47,7 +48,7 @@ def corners(pixmap, pixfrac=1.0):
     Parameters
     ----------
     pixmap : ndarray, shape (ny, nx, 2)
-        Output ``x`` and ``y`` coordinates of each input pixel centre.
+        Output ``x`` and ``y`` coordinates of each input pixel center.
         NaN marks pixels without a mapping.
     pixfrac : float
         Linear size of the shrunken pixel as a fraction of the input pixel.
@@ -74,7 +75,7 @@ def jacobian(corners):
 
     Half the cross product of the diagonals, as in drizzle.  It is
     positive when the corners go clockwise on the output grid and negative
-    when they go anticlockwise (a flip), and so are the overlap areas, so
+    when they go counterclockwise (a flip), and so are the overlap areas, so
     the sign cancels in the operator.
 
     Parameters
@@ -115,7 +116,7 @@ def overlap_triplets(corners, out_shape):
         Flat index of the output pixel, ``y * nx_out + x``.
     area : ndarray of float64, shape (n,)
         Overlap area in output pixels, non-zero; negative when the
-        quadrilateral is anticlockwise.
+        quadrilateral is counterclockwise.
     """
     corners = np.ascontiguousarray(corners, dtype=np.float64)
     if corners.ndim != 4 or corners.shape[2:] != (4, 2):
@@ -172,7 +173,7 @@ def _corners(pixmap, h):
 def _interpolate_point(pixmap, xin, yin, out, j, i, k):
     """Bilinear interpolation of the pixel map at one input point, as drizzle's ``interpolate_point``.
 
-    Points beyond the outer pixel centres are extrapolated from the outer
+    Points beyond the outer pixel centers are extrapolated from the outer
     2x2 block.
 
     Parameters
@@ -216,7 +217,7 @@ def _interpolate_four_points(pixmap, j, i, h, out):
     out : ndarray, shape (ny, nx, 4, 2)
         The corners are written to ``out[j, i]``.
     """
-    centre = (1.0 - h) * (1.0 - h)
+    center = (1.0 - h) * (1.0 - h)
     side = (1.0 - h) * h
     diagonal = h * h
     for q in range(2):
@@ -230,10 +231,10 @@ def _interpolate_four_points(pixmap, j, i, h, out):
         p02 = pixmap[j + 1, i - 1, q]
         p12 = pixmap[j + 1, i, q]
         p22 = pixmap[j + 1, i + 1, q]
-        out[j, i, 0, q] = p01 * side + p11 * centre + p02 * diagonal + p12 * side
-        out[j, i, 1, q] = p11 * centre + p21 * side + p12 * side + p22 * diagonal
-        out[j, i, 2, q] = p10 * side + p20 * diagonal + p11 * centre + p21 * side
-        out[j, i, 3, q] = p00 * diagonal + p10 * side + p01 * side + p11 * centre
+        out[j, i, 0, q] = p01 * side + p11 * center + p02 * diagonal + p12 * side
+        out[j, i, 1, q] = p11 * center + p21 * side + p12 * side + p22 * diagonal
+        out[j, i, 2, q] = p10 * side + p20 * diagonal + p11 * center + p21 * side
+        out[j, i, 3, q] = p00 * diagonal + p10 * side + p01 * side + p11 * center
 
 
 @numba.njit(parallel=True, cache=True, error_model="numpy")
@@ -396,14 +397,14 @@ def _boxer(is_, js, x0, y0, x1, y1, x2, y2, x3, y3):
     Parameters
     ----------
     is_, js : float
-        Output pixel centre; the pixel spans ``is_ - 0.5`` to ``is_ + 0.5``.
+        Output pixel center; the pixel spans ``is_ - 0.5`` to ``is_ + 0.5``.
     x0, y0, x1, y1, x2, y2, x3, y3 : float
         Quadrilateral corners in order.
 
     Returns
     -------
     float
-        Positive for clockwise corners, negative for anticlockwise.
+        Positive for clockwise corners, negative for counterclockwise.
     """
     is_ -= 0.5
     js -= 0.5

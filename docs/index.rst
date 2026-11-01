@@ -18,15 +18,19 @@ Usage
 
     coadd = Coadd(out_shape, n_var=1)
     for data, var, weights, pixmap in exposures:
-        W = drizzle_operator(pixmap, out_shape, pixfrac=0.8, weights=weights)
-        coadd.add(W, data, variances=[var])
+        op = drizzle_operator(pixmap, out_shape, pixfrac=0.8, weights=weights)
+        coadd.add(op, data, variances=[var])
 
     image = coadd.out_img
     weight = coadd.out_wht
     variance = coadd.out_var[0]
 
+``op`` is an `Operator`: ``W`` on the exposure's bounding box of the output
+grid, ``op.box``, so that building and applying it scale with the exposure
+rather than with the output grid.
+
 The pixel map holds the output ``x`` and ``y`` of every input pixel
-centre, shape ``(ny, nx, 2)``, NaN where an input pixel has no mapping.
+center, shape ``(ny, nx, 2)``, NaN where an input pixel has no mapping.
 
 Reference
 ---------

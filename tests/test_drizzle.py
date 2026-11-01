@@ -14,7 +14,7 @@ from spizzle import Coadd, drizzle_operator
 
 SHAPE = (30, 40)
 OUT_SHAPE = (130, 140)
-CENTRE = (70.0, 65.0)
+CENTER = (70.0, 65.0)
 
 
 def drizzle_outputs(out_shape):
@@ -71,16 +71,16 @@ def _require_float64_drizzle():
 _require_float64_drizzle()
 
 
-def distorted_pixmap(shape, degrees, scale, centre):
-    """Pixel map of an input with quadratic distortion, rotated by ``degrees``, scaled by ``scale`` and centred at ``centre``."""
+def distorted_pixmap(shape, degrees, scale, center):
+    """Pixel map of an input with quadratic distortion, rotated by ``degrees``, scaled by ``scale`` and centered at ``center``."""
     t = np.deg2rad(degrees)
     y, x = np.indices(shape, dtype=np.float64)
     xc = x - shape[1] / 2
     yc = y - shape[0] / 2
     xd = xc + 2e-3 * xc * yc
     yd = yc + 1e-3 * xc * xc
-    xo = scale * (np.cos(t) * xd - np.sin(t) * yd) + centre[0]
-    yo = scale * (np.sin(t) * xd + np.cos(t) * yd) + centre[1]
+    xo = scale * (np.cos(t) * xd - np.sin(t) * yd) + center[0]
+    yo = scale * (np.sin(t) * xd + np.cos(t) * yd) + center[1]
     return np.dstack([xo, yo])
 
 
@@ -92,13 +92,13 @@ def random_image(shape, low, high, seed):
 @pytest.mark.parametrize("pixel", [(0, 0), (0, 39), (29, 0), (29, 39), (1, 1), (28, 38), (15, 20)])
 def test_operator_column_matches_drizzle_weights_of_one_pixel(pixel):
     """drizzle_operator's column for one input pixel equals drizzle's output weights with only that pixel weighted, to 1e-12."""
-    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTRE)
+    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTER)
     weights = np.zeros(SHAPE)
     weights[pixel] = 1.0
     outputs = drizzle_outputs(OUT_SHAPE)
     tdriz(outputs, np.ones(SHAPE), weights, pixmap, pixfrac=0.7)
 
-    W = drizzle_operator(pixmap, OUT_SHAPE, pixfrac=0.7)
+    W = drizzle_operator(pixmap, OUT_SHAPE, pixfrac=0.7).full()
     column = W[:, [np.ravel_multi_index(pixel, SHAPE)]].toarray()
 
     np.testing.assert_allclose(column.reshape(OUT_SHAPE), outputs["counts"], rtol=0, atol=1e-12)
@@ -107,7 +107,7 @@ def test_operator_column_matches_drizzle_weights_of_one_pixel(pixel):
 @pytest.mark.parametrize("pixfrac", [0.5, 0.8, 1.0])
 def test_weights_match_drizzle_for_pixfrac(pixfrac):
     """Coadd.out_wht of a distorted, weighted exposure equals drizzle's output weights for the same pixfrac."""
-    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTRE)
+    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTER)
     weights = random_image(SHAPE, 0.5, 1.5, seed=1)
     outputs = drizzle_outputs(OUT_SHAPE)
     tdriz(outputs, np.ones(SHAPE), weights, pixmap, pixfrac=pixfrac)
@@ -121,7 +121,7 @@ def test_weights_match_drizzle_for_pixfrac(pixfrac):
 @pytest.mark.parametrize("pixfrac", [0.5, 0.8, 1.0])
 def test_science_matches_drizzle_for_pixfrac(pixfrac):
     """Coadd.out_img of a distorted, weighted exposure equals drizzle's output, NaN in the same pixels, for the same pixfrac."""
-    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTRE)
+    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTER)
     data = random_image(SHAPE, 10.0, 11.0, seed=2)
     weights = random_image(SHAPE, 0.5, 1.5, seed=3)
     outputs = drizzle_outputs(OUT_SHAPE)
@@ -136,7 +136,7 @@ def test_science_matches_drizzle_for_pixfrac(pixfrac):
 @pytest.mark.parametrize("degrees", [0.0, 30.0, 90.0, 137.0])
 def test_science_matches_drizzle_for_rotation(degrees):
     """Coadd.out_img of an exposure rotated by ``degrees`` equals drizzle's output."""
-    pixmap = distorted_pixmap(SHAPE, degrees, 1.7, CENTRE)
+    pixmap = distorted_pixmap(SHAPE, degrees, 1.7, CENTER)
     data = random_image(SHAPE, 10.0, 11.0, seed=4)
     outputs = drizzle_outputs(OUT_SHAPE)
     tdriz(outputs, data, np.ones(SHAPE), pixmap, pixfrac=0.8)
@@ -150,7 +150,7 @@ def test_science_matches_drizzle_for_rotation(degrees):
 @pytest.mark.parametrize("scale", [0.5, 1.0, 2.0])
 def test_science_matches_drizzle_for_scale(scale):
     """Coadd.out_img of an exposure whose pixels are ``scale`` output pixels across equals drizzle's output."""
-    pixmap = distorted_pixmap(SHAPE, 23.0, scale, CENTRE)
+    pixmap = distorted_pixmap(SHAPE, 23.0, scale, CENTER)
     data = random_image(SHAPE, 10.0, 11.0, seed=5)
     outputs = drizzle_outputs(OUT_SHAPE)
     tdriz(outputs, data, np.ones(SHAPE), pixmap, pixfrac=0.8)
@@ -163,8 +163,8 @@ def test_science_matches_drizzle_for_scale(scale):
 
 def test_science_matches_drizzle_for_flipped_input():
     """Coadd.out_img of an exposure mirrored in x, with negative jacobian, equals drizzle's output."""
-    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTRE)
-    pixmap[..., 0] = 2 * CENTRE[0] - pixmap[..., 0]
+    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTER)
+    pixmap[..., 0] = 2 * CENTER[0] - pixmap[..., 0]
     data = random_image(SHAPE, 10.0, 11.0, seed=6)
     outputs = drizzle_outputs(OUT_SHAPE)
     tdriz(outputs, data, np.ones(SHAPE), pixmap, pixfrac=0.8)
@@ -177,7 +177,7 @@ def test_science_matches_drizzle_for_flipped_input():
 
 def test_science_matches_drizzle_with_nan_pixels_of_zero_weight():
     """Coadd.out_img of an exposure with 40 NaN pixels of weight 0 equals drizzle's output, which has no NaN from them."""
-    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTRE)
+    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTER)
     data = random_image(SHAPE, 10.0, 11.0, seed=7)
     weights = random_image(SHAPE, 0.5, 1.5, seed=8)
     bad = np.random.default_rng(9).choice(data.size, 40, replace=False)
@@ -194,7 +194,7 @@ def test_science_matches_drizzle_with_nan_pixels_of_zero_weight():
 
 def test_variance_matches_drizzle():
     """Coadd.out_var of an exposure with two variance planes equals drizzle's output2 arrays."""
-    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTRE)
+    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTER)
     data = random_image(SHAPE, 10.0, 11.0, seed=10)
     weights = random_image(SHAPE, 0.5, 1.5, seed=11)
     variances = [random_image(SHAPE, 1.0, 2.0, seed=12), random_image(SHAPE, 3.0, 4.0, seed=13)]
@@ -209,7 +209,7 @@ def test_variance_matches_drizzle():
 
 def test_science_with_iscale_matches_drizzle():
     """Coadd.out_img of an exposure added with iscale 2.5 equals drizzle's output with iscale 2.5."""
-    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTRE)
+    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTER)
     data = random_image(SHAPE, 10.0, 11.0, seed=14)
     outputs = drizzle_outputs(OUT_SHAPE)
     tdriz(outputs, data, np.ones(SHAPE), pixmap, pixfrac=0.8, iscale=2.5)
@@ -222,7 +222,7 @@ def test_science_with_iscale_matches_drizzle():
 
 def test_variance_with_iscale_matches_drizzle():
     """Coadd.out_var of an exposure added with iscale 2.5 equals drizzle's output2 with iscale 2.5."""
-    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTRE)
+    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTER)
     variances = [random_image(SHAPE, 1.0, 2.0, seed=15)]
     outputs = drizzle_outputs_with_variance(OUT_SHAPE, 1)
     tdriz(outputs, np.ones(SHAPE), np.ones(SHAPE), pixmap, pixfrac=0.8, variances=variances, iscale=2.5)
@@ -235,7 +235,7 @@ def test_variance_with_iscale_matches_drizzle():
 
 def test_weights_with_weight_scale_match_drizzle():
     """Coadd.out_wht of an exposure with weight_scale 0.3 equals drizzle's output weights with wtscale 0.3."""
-    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTRE)
+    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTER)
     weights = random_image(SHAPE, 0.5, 1.5, seed=16)
     outputs = drizzle_outputs(OUT_SHAPE)
     tdriz(outputs, np.ones(SHAPE), weights, pixmap, pixfrac=0.8, wtscale=0.3)
@@ -248,7 +248,7 @@ def test_weights_with_weight_scale_match_drizzle():
 
 def test_two_exposures_match_drizzle():
     """Coadd.out_img of two overlapping exposures with different rotations equals drizzle's output after both."""
-    pixmaps = [distorted_pixmap(SHAPE, 23.0, 1.7, CENTRE), distorted_pixmap(SHAPE, 61.0, 1.7, (75.0, 60.0))]
+    pixmaps = [distorted_pixmap(SHAPE, 23.0, 1.7, CENTER), distorted_pixmap(SHAPE, 61.0, 1.7, (75.0, 60.0))]
     data = [random_image(SHAPE, 10.0, 11.0, seed=17), random_image(SHAPE, 12.0, 13.0, seed=18)]
     weights = [random_image(SHAPE, 0.5, 1.5, seed=19), random_image(SHAPE, 0.5, 1.5, seed=20)]
     outputs = drizzle_outputs(OUT_SHAPE)
@@ -264,7 +264,7 @@ def test_two_exposures_match_drizzle():
 
 def test_context_of_two_exposures_matches_drizzle():
     """Coadd.out_ctx of two overlapping exposures equals drizzle's context with uniqid 1 and 2."""
-    pixmaps = [distorted_pixmap(SHAPE, 23.0, 1.7, CENTRE), distorted_pixmap(SHAPE, 61.0, 1.7, (75.0, 60.0))]
+    pixmaps = [distorted_pixmap(SHAPE, 23.0, 1.7, CENTER), distorted_pixmap(SHAPE, 61.0, 1.7, (75.0, 60.0))]
     outputs = drizzle_outputs(OUT_SHAPE)
     tdriz(outputs, np.ones(SHAPE), np.ones(SHAPE), pixmaps[0], pixfrac=0.8, uniqid=1)
     tdriz(outputs, np.ones(SHAPE), np.ones(SHAPE), pixmaps[1], pixfrac=0.8, uniqid=2)
@@ -279,7 +279,7 @@ def test_context_of_two_exposures_matches_drizzle():
 def test_partial_overlap_matches_drizzle_away_from_the_edges():
     """Coadd.out_img of an exposure larger than the output equals drizzle's output except in the outer two rings.
 
-    drizzle skips input pixels centred outside the output frame, so the outer
+    drizzle skips input pixels centered outside the output frame, so the outer
     two rings of output pixels get less weight from drizzle than from spizzle.
     """
     pixmap = distorted_pixmap(SHAPE, 30.0, 1.0, (14.0, 12.0))
@@ -297,7 +297,7 @@ def test_partial_overlap_matches_drizzle_away_from_the_edges():
 def test_output_edge_weight_differs_from_drizzle():
     """For an input extending 9.7 pixels past the left output edge, output column 0 gets weight 1 from spizzle, 0.7 from drizzle.
 
-    This test fails once drizzle stops skipping input pixels centred outside
+    This test fails once drizzle stops skipping input pixels centered outside
     the output frame; spizzle's weights are then drizzle's.
     """
     y, x = np.indices((12, 20), dtype=np.float64)

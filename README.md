@@ -12,8 +12,10 @@ there for noise propagation: with independent input noise the covariance
 of the weighted sums `W @ data` is `W @ diag(var) @ W.T`, and the output
 image is those sums divided by the output weights.
 
- - `drizzle_operator`: the operator of one exposure, a `scipy.sparse`
-   CSR array of shape (output pixels, input pixels)
+ - `drizzle_operator`: the operator of one exposure, an `Operator`: a
+   `scipy.sparse` CSR array of shape (box pixels, input pixels) on the
+   exposure's bounding box of the output grid, the box, and `full()` for
+   the CSR array on the whole output grid
  - `corners`, `jacobian`, `overlap_triplets`, `build_operator`: the steps
    of `drizzle_operator`, to keep the overlap geometry and re-weight it
    without recomputing it
@@ -37,7 +39,7 @@ The differences:
  - Square kernel only; `pixfrac` must be larger than 0.001, below which
    drizzle switches to the point kernel.
  - Every input pixel with a valid pixel map is drizzled.  drizzle skips
-   input pixels whose centres fall outside the output frame, so when the
+   input pixels whose centers fall outside the output frame, so when the
    inputs extend past the output, the outer two rings of output pixels
    get less weight from drizzle than from spizzle.  Away from those
    edges the results are the same.
@@ -55,7 +57,7 @@ oversampling with `pixfrac=0.8`, building `W` takes 0.26 s and
 `Coadd.add` about 0.012 s per plane.  The science data with three variance
 planes take 0.30 s, against 0.72 s for drizzle with the variance planes in
 the same call; each further pass over the same geometry, such as a noise
-realisation, costs about 0.015 s, against 0.56 s for a drizzle call.  On a
+realization, costs about 0.015 s, against 0.56 s for a drizzle call.  On a
 single thread spizzle is slower than drizzle.  The peak memory is higher:
 3.0 GiB for the exposure with three variance planes, against 1.25 GiB.
 
@@ -79,8 +81,8 @@ from spizzle import Coadd, drizzle_operator
 
 coadd = Coadd(out_shape, n_var=1)
 for data, var, weights, pixmap in exposures:
-    W = drizzle_operator(pixmap, out_shape, pixfrac=0.8, weights=weights)
-    coadd.add(W, data, variances=[var])
+    op = drizzle_operator(pixmap, out_shape, pixfrac=0.8, weights=weights)
+    coadd.add(op, data, variances=[var])
 
 image = coadd.out_img
 weight = coadd.out_wht
@@ -88,7 +90,7 @@ variance = coadd.out_var[0]
 context = coadd.out_ctx
 ```
 
-The pixel map holds the output `x` and `y` of every input pixel centre,
+The pixel map holds the output `x` and `y` of every input pixel center,
 shape `(ny, nx, 2)`, NaN where an input pixel has no mapping.  From two
 WCS objects with the common astropy interface (gwcs or `astropy.wcs`):
 
@@ -101,6 +103,15 @@ pixmap = np.dstack([xo, yo])
 ```
 
 or `drizzle.utils.calc_pixmap(wcs_in, wcs_out)`.
+
+An exposure usually covers a small part of the output grid, which can be
+a large mosaic, so `drizzle_operator` keeps `W` to the exposure's
+bounding box: `op.matrix @ data.ravel()` gives the weighted sums on the
+pixels of `op.box`, a pair of slices, so that `image[op.box]` is the
+exposure's region of an output image.  Building and applying the
+operator then scale with the exposure, not with the output grid.
+`op.full()` gives `W` on the whole output grid, and `Coadd.add` takes
+either.
 
 `Coadd.add` takes drizzle's `iscale` for the data (its square for the
 variances), and `drizzle_operator` takes drizzle's `wht_scale` as
@@ -115,7 +126,7 @@ from spizzle import build_operator, corners, jacobian, overlap_triplets
 c = corners(pixmap, pixfrac=0.8)
 triplets = overlap_triplets(c, out_shape)
 jaco = jacobian(c)
-W = build_operator(triplets, jaco, out_shape, weights=weights)
+op = build_operator(triplets, jaco, out_shape, weights=weights)
 ```
 
 The geometry, `build_operator` and `Coadd.add` run on numba's threads;

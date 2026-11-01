@@ -13,9 +13,9 @@ input pixel and clip at the output bounds instead.
 `init_image_scanner` (`src/cdrizzlemap.c:1089`) clips the input image
 outline to the output frame and maps the result back to the input frame;
 `get_scanline_limits` (`:919`) then visits only the input pixels whose
-centres lie inside that polygon (`init_edge`, `:766`, shifts the edges
+centers lie inside that polygon (`init_edge`, `:766`, shifts the edges
 inwards by half a pixel, and the limits are rounded).  An input pixel
-whose centre is just outside the output frame is skipped, although its
+whose center is just outside the output frame is skipped, although its
 footprint covers part of the output edge pixel.
 
 The loss shows at the top, left and right output edges.  The bottom edge
@@ -31,7 +31,7 @@ import numpy as np
 from drizzle import cdrizzle
 
 y, x = np.indices((12, 20), dtype=np.float64)
-pixmap = np.dstack([x - 9.7, y])   # input column 9 centred at x = -0.7
+pixmap = np.dstack([x - 9.7, y])   # input column 9 centered at x = -0.7
 out = np.zeros((12, 10)); wht = np.zeros((12, 10)); ctx = np.zeros((12, 10), np.int32)
 cdrizzle.tdriz(np.ones((12, 20)), np.ones((12, 20)), pixmap, out, wht, ctx,
                pixfrac=1.0, kernel="square", in_units="cps", expscale=1.0,
@@ -48,16 +48,16 @@ This matters when the output frame is smaller than the inputs: fixed
 output shapes, tiles and sky cells.  The usual jwst output frame encloses
 all inputs, so there the polygon is the whole input image.
 
-## 2. Uninitialised scanner fields read when input and output do not overlap
+## 2. Uninitialized scanner fields read when input and output do not overlap
 
-**Severity:** undefined behaviour, no visible effect so far.
+**Severity:** undefined behavior, no visible effect so far.
 
 When the clipped polygon has no vertices, `init_scanner`
 (`src/cdrizzlemap.c:803`) returns before setting `s->min_y`, `s->max_y`
 and `s->ymax`, and `init_image_scanner` (`:1160-1161`) then computes
 `*ymin` and `*ymax` from them.  The kernel returns early because
 `init_image_scanner` returned 1, so nothing is drizzled, but the reads
-are of uninitialised memory.
+are of uninitialized memory.
 
 ## 3. A failed pixmap inversion leaves a partial scan polygon
 

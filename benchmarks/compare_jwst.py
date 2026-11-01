@@ -80,7 +80,7 @@ class Exposure:
 def output_frame(exposures, pixel_scale_ratio, margin=2):
     """North-up TAN WCS and shape enclosing all exposures.
 
-    The pixel scale is the first exposure's at its centre times
+    The pixel scale is the first exposure's at its center times
     ``pixel_scale_ratio``.
     """
     ny, nx = exposures[0].data.shape

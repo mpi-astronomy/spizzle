@@ -11,14 +11,14 @@ def identity_pixmap(shape):
     return np.dstack([x, y])
 
 
-def rotated_pixmap(shape, degrees, scale, centre):
-    """Pixel map of an input rotated by ``degrees`` and scaled by ``scale``, its centre at ``centre`` (x, y)."""
+def rotated_pixmap(shape, degrees, scale, center):
+    """Pixel map of an input rotated by ``degrees`` and scaled by ``scale``, its center at ``center`` (x, y)."""
     t = np.deg2rad(degrees)
     y, x = np.indices(shape, dtype=np.float64)
     xc = x - shape[1] / 2
     yc = y - shape[0] / 2
-    xo = scale * (np.cos(t) * xc - np.sin(t) * yc) + centre[0]
-    yo = scale * (np.sin(t) * xc + np.cos(t) * yc) + centre[1]
+    xo = scale * (np.cos(t) * xc - np.sin(t) * yc) + center[0]
+    yo = scale * (np.sin(t) * xc + np.cos(t) * yc) + center[1]
     return np.dstack([xo, yo])
 
 
@@ -49,7 +49,7 @@ def test_nintd_rounds_halves_away_from_zero(x, expected):
 
 
 def test_boxer_unit_square_on_the_pixel():
-    """_boxer for output pixel (3, 2) and the clockwise unit square around its centre gives 1."""
+    """_boxer for output pixel (3, 2) and the clockwise unit square around its center gives 1."""
     assert _boxer(3.0, 2.0, 2.5, 2.5, 3.5, 2.5, 3.5, 1.5, 2.5, 1.5) == 1.0
 
 
@@ -58,8 +58,8 @@ def test_boxer_unit_square_shifted_by_a_quarter():
     assert _boxer(3.0, 2.0, 2.75, 2.5, 3.75, 2.5, 3.75, 1.5, 2.75, 1.5) == 0.75
 
 
-def test_boxer_anticlockwise_square_is_negative():
-    """_boxer for output pixel (3, 2) and its unit square in anticlockwise order gives -1."""
+def test_boxer_counterclockwise_square_is_negative():
+    """_boxer for output pixel (3, 2) and its unit square in counterclockwise order gives -1."""
     assert _boxer(3.0, 2.0, 2.5, 1.5, 3.5, 1.5, 3.5, 2.5, 2.5, 2.5) == -1.0
 
 
@@ -69,7 +69,7 @@ def test_boxer_diamond_inside_the_pixel():
 
 
 def test_boxer_diamond_on_the_right_edge():
-    """_boxer for output pixel (3, 2) and the same diamond centred on the pixel's right edge gives 0.25."""
+    """_boxer for output pixel (3, 2) and the same diamond centered on the pixel's right edge gives 0.25."""
     assert _boxer(3.0, 2.0, 3.5, 2.5, 4.0, 2.0, 3.5, 1.5, 3.0, 2.0) == 0.25
 
 
@@ -206,7 +206,7 @@ def test_overlap_triplets_skip_nan_corners():
 
 
 def test_overlap_triplets_cover_output_edge():
-    """overlap_triplets of an input whose column 9 is centred at x = -0.7 gives that column area 0.3 in output column 0."""
+    """overlap_triplets of an input whose column 9 is centered at x = -0.7 gives that column area 0.3 in output column 0."""
     pixmap = identity_pixmap((3, 20))
     pixmap[..., 0] -= 9.7
     in_idx, out_idx, area = overlap_triplets(corners(pixmap, 1.0), (3, 10))

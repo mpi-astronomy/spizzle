@@ -16,7 +16,13 @@ and the output, ``num / wsum`` and ``vnum / wsum**2``, is formed once at
 the end in float64.  In exact arithmetic this is the running weighted mean
 that drizzle updates for every contribution.  ``W`` is built and applied
 on numba's threads, and the results do not depend on their number.
+
+An exposure usually lands on a small part of the output grid, which can be
+a large mosaic, so `Operator` keeps ``W`` to the rows of the exposure's
+bounding box on the output grid.
 """
+from dataclasses import dataclass
+
 import numba
 import numpy as np
 from scipy import sparse
@@ -26,8 +32,55 @@ from .geometry import corners, jacobian, overlap_triplets
 __all__ = [
     "build_operator",
     "drizzle_operator",
+    "Operator",
     "Coadd",
 ]
+
+
+@dataclass(frozen=True, eq=False)
+class Operator:
+    """Drizzle operator of one exposure on its bounding box of the output grid.
+
+    ``matrix @ data.ravel()`` gives the exposure's weighted sums on the
+    output pixels of ``box``; the exposure contributes nothing outside it.
+    Keeping to the box makes the operator, and the work to build and apply
+    it, scale with the exposure rather than with the output grid.
+
+    Parameters
+    ----------
+    matrix : scipy.sparse.csr_array, shape (box_ny * box_nx, ny * nx)
+        Row ``r`` is output pixel ``(y0 + r // box_nx, x0 + r % box_nx)``.
+    box : tuple of slice
+        ``(slice(y0, y1), slice(x0, x1))``, the smallest box of output
+        pixels that holds every entry, so that ``image[box]`` is the
+        exposure's region of an output image; empty if the exposure misses
+        the output grid.
+    out_shape : tuple of int
+        ``(ny_out, nx_out)``.
+    """
+
+    matrix: sparse.csr_array
+    box: tuple
+    out_shape: tuple
+
+    @property
+    def box_shape(self):
+        """tuple of int: ``(box_ny, box_nx)``, the shape of ``image[box]``."""
+        return (self.box[0].stop - self.box[0].start, self.box[1].stop - self.box[1].start)
+
+    def full(self):
+        """The operator on the whole output grid.
+
+        Returns
+        -------
+        scipy.sparse.csr_array, shape (ny_out * nx_out, ny * nx)
+            Shares its indices and values with `matrix`.
+        """
+        counts = np.zeros(self.out_shape, dtype=np.int64)
+        counts[self.box] = np.diff(self.matrix.indptr).reshape(self.box_shape)
+        indptr = np.zeros(counts.size + 1, dtype=np.int64)
+        np.cumsum(counts.ravel(), out=indptr[1:])
+        return sparse.csr_array((self.matrix.data, self.matrix.indices, indptr), shape=(counts.size, self.matrix.shape[1]))
 
 
 def build_operator(triplets, jaco, out_shape, weights=None, weight_scale=1.0):
@@ -51,7 +104,7 @@ def build_operator(triplets, jaco, out_shape, weights=None, weight_scale=1.0):
 
     Returns
     -------
-    scipy.sparse.csr_array, shape (ny_out * nx_out, ny * nx)
+    Operator
     """
     in_idx, out_idx, area = triplets
     jaco = np.asarray(jaco, dtype=np.float64)
@@ -71,21 +124,32 @@ def build_operator(triplets, jaco, out_shape, weights=None, weight_scale=1.0):
     n_chunks = max(1, min(4 * numba.get_num_threads(), in_idx.size))
     chunk_starts = np.linspace(0, in_idx.size, n_chunks + 1).astype(np.int64)
     counts = np.zeros((n_chunks, ny_out), dtype=np.int64)
-    _count_rows(in_idx, out_idx, area, w, nx_out, chunk_starts, counts)
-    row_starts = np.zeros(ny_out + 1, dtype=np.int64)
+    col_min = np.empty(n_chunks, dtype=np.int64)
+    col_max = np.empty(n_chunks, dtype=np.int64)
+    _count_rows(in_idx, out_idx, area, w, nx_out, chunk_starts, counts, col_min, col_max)
+    rows = np.flatnonzero(counts.sum(axis=0))
+    if rows.size:
+        y0, y1, x0, x1 = int(rows[0]), int(rows[-1]) + 1, int(col_min.min()), int(col_max.max()) + 1
+    else:
+        y0 = y1 = x0 = x1 = 0
+    box_ny, box_nx = y1 - y0, x1 - x0
+
+    counts = counts[:, y0:y1]
+    row_starts = np.zeros(box_ny + 1, dtype=np.int64)
     np.cumsum(counts.sum(axis=0), out=row_starts[1:])
     offsets = row_starts[:-1] + np.cumsum(counts, axis=0) - counts
     nnz = int(row_starts[-1])
     row_cols = np.empty(nnz, dtype=np.int64)
     row_ins = np.empty(nnz, dtype=in_idx.dtype)
     row_values = np.empty(nnz)
-    _bucket_rows(in_idx, out_idx, area, w, nx_out, chunk_starts, offsets, row_cols, row_ins, row_values)
-    indptr = np.empty(ny_out * nx_out + 1, dtype=np.int64)
+    _bucket_rows(in_idx, out_idx, area, w, nx_out, y0, x0, chunk_starts, offsets, row_cols, row_ins, row_values)
+    indptr = np.empty(box_ny * box_nx + 1, dtype=np.int64)
     indptr[0] = 0
     indices = np.empty(nnz, dtype=in_idx.dtype)
     data = np.empty(nnz)
-    _sort_rows(row_starts, nx_out, row_cols, row_ins, row_values, indptr, indices, data)
-    return sparse.csr_array((data, indices, indptr), shape=(ny_out * nx_out, jaco.size))
+    _sort_rows(row_starts, box_nx, row_cols, row_ins, row_values, indptr, indices, data)
+    matrix = sparse.csr_array((data, indices, indptr), shape=(box_ny * box_nx, jaco.size))
+    return Operator(matrix, (slice(y0, y1), slice(x0, x1)), (ny_out, nx_out))
 
 
 def drizzle_operator(pixmap, out_shape, pixfrac=1.0, weights=None, weight_scale=1.0):
@@ -97,7 +161,7 @@ def drizzle_operator(pixmap, out_shape, pixfrac=1.0, weights=None, weight_scale=
     Parameters
     ----------
     pixmap : ndarray, shape (ny, nx, 2)
-        Output ``x`` and ``y`` coordinates of each input pixel centre.
+        Output ``x`` and ``y`` coordinates of each input pixel center.
     out_shape : tuple of int
         ``(ny_out, nx_out)``.
     pixfrac : float
@@ -109,7 +173,7 @@ def drizzle_operator(pixmap, out_shape, pixfrac=1.0, weights=None, weight_scale=
 
     Returns
     -------
-    scipy.sparse.csr_array, shape (ny_out * nx_out, ny * nx)
+    Operator
     """
     c = corners(pixmap, pixfrac)
     return build_operator(overlap_triplets(c, out_shape), jacobian(c), out_shape, weights, weight_scale)
@@ -143,9 +207,10 @@ class Coadd:
 
         Parameters
         ----------
-        W : scipy.sparse array, shape (ny_out * nx_out, ny * nx)
+        W : Operator or scipy.sparse array
             The exposure's operator, from `drizzle_operator` or
-            `build_operator`.
+            `build_operator`, or a sparse array of shape
+            (ny_out * nx_out, ny * nx) on the whole output grid.
         data : ndarray, shape (ny, nx)
             Science data.
         variances : sequence of ndarray or None
@@ -154,10 +219,19 @@ class Coadd:
         iscale : float
             Factor applied to the data, and its square to the variances.
         """
-        W = sparse.csr_array(W)
+        if isinstance(W, Operator):
+            if tuple(W.out_shape) != self.out_shape:
+                raise ValueError(f"operator for output shape {tuple(W.out_shape)} does not match output shape {self.out_shape}")
+            matrix = sparse.csr_array(W.matrix)
+            y0, x0 = W.box[0].start, W.box[1].start
+            box_ny, box_nx = W.box_shape
+        else:
+            matrix = sparse.csr_array(W)
+            y0, x0 = 0, 0
+            box_ny, box_nx = self.out_shape
         data = np.asarray(data, dtype=np.float64)
-        if W.shape != (self._num.size, data.size):
-            raise ValueError(f"operator shape {W.shape} does not match output size {self._num.size} and data size {data.size}")
+        if matrix.shape != (box_ny * box_nx, data.size):
+            raise ValueError(f"operator shape {matrix.shape} does not match {box_ny * box_nx} output pixels and {data.size} data")
         if len(variances) != len(self._vnum):
             raise ValueError(f"expected {len(self._vnum)} variance planes, got {len(variances)}")
 
@@ -165,17 +239,17 @@ class Coadd:
         if plane == len(self._ctx):
             self._ctx.append(np.zeros(self._num.size, dtype=np.int32))
         mask = np.uint32(1 << bit).view(np.int32)
-        _add_data(W.indptr, W.indices, W.data, data.ravel(), iscale, self._num, self._wsum, self._ctx[plane], mask)
+        rows = (matrix.indptr, matrix.indices, matrix.data, y0, x0, box_ny, box_nx, self.out_shape[1])
+        _add_data(*rows, data.ravel(), iscale, self._num, self._wsum, self._ctx[plane], mask)
         for vnum, var in zip(self._vnum, variances):
             if var is not None:
-                var = np.asarray(var, dtype=np.float64).ravel()
-                _add_variance(W.indptr, W.indices, W.data, var, iscale * iscale, vnum)
+                _add_variance(*rows, np.asarray(var, dtype=np.float64).ravel(), iscale * iscale, vnum)
         self.n_images += 1
 
     @property
     def out_img(self):
         """ndarray, shape out_shape: weighted mean of the data, `fillval` without weight."""
-        return self._normalise(self._num, self._wsum)
+        return self._normalize(self._num, self._wsum)
 
     @property
     def out_wht(self):
@@ -186,14 +260,14 @@ class Coadd:
     def out_var(self):
         """list of ndarray, shape out_shape: variance of `out_img` from each variance plane."""
         wsum2 = self._wsum * self._wsum
-        return [self._normalise(vnum, wsum2) for vnum in self._vnum]
+        return [self._normalize(vnum, wsum2) for vnum in self._vnum]
 
     @property
     def out_ctx(self):
         """ndarray of int32, shape (n_planes,) + out_shape: bit ``k % 32`` of plane ``k // 32`` set where exposure k lands."""
         return np.array(self._ctx, dtype=np.int32).reshape((len(self._ctx),) + self.out_shape)
 
-    def _normalise(self, num, den):
+    def _normalize(self, num, den):
         """``num / den`` where the weight sum is non-zero, `fillval` elsewhere."""
         out = np.full(num.size, self.fillval, dtype=np.float64)
         nonzero = self._wsum != 0.0
@@ -202,8 +276,8 @@ class Coadd:
 
 
 @numba.njit(parallel=True, cache=True, error_model="numpy")
-def _count_rows(in_idx, out_idx, area, w, nx_out, chunk_starts, counts):
-    """Count the non-zero entries of each chunk of triplets in each output row.
+def _count_rows(in_idx, out_idx, area, w, nx_out, chunk_starts, counts, col_min, col_max):
+    """Count the non-zero entries of each chunk of triplets in each output row, and find their column range.
 
     Parameters
     ----------
@@ -216,48 +290,63 @@ def _count_rows(in_idx, out_idx, area, w, nx_out, chunk_starts, counts):
         Triplet ranges of the chunks.
     counts : ndarray of int64, shape (n_chunks, ny_out)
         Incremented in place.
+    col_min, col_max : ndarray of int64, shape (n_chunks,)
+        Set to the smallest and largest output column of each chunk's
+        non-zero entries; ``nx_out`` and -1 for a chunk without any.
     """
     for c in numba.prange(chunk_starts.size - 1):
+        lo = nx_out
+        hi = -1
         for k in range(chunk_starts[c], chunk_starts[c + 1]):
             if area[k] * w[in_idx[k]] != 0.0:
-                counts[c, out_idx[k] // nx_out] += 1
+                row = out_idx[k] // nx_out
+                col = out_idx[k] - row * nx_out
+                counts[c, row] += 1
+                lo = min(lo, col)
+                hi = max(hi, col)
+        col_min[c] = lo
+        col_max[c] = hi
 
 
 @numba.njit(parallel=True, cache=True, error_model="numpy")
-def _bucket_rows(in_idx, out_idx, area, w, nx_out, chunk_starts, offsets, row_cols, row_ins, row_values):
-    """Write the non-zero entries grouped by output row, in triplet order within each row.
+def _bucket_rows(in_idx, out_idx, area, w, nx_out, y0, x0, chunk_starts, offsets, row_cols, row_ins, row_values):
+    """Write the non-zero entries grouped by row of the box, in triplet order within each row.
 
     Parameters
     ----------
     in_idx, out_idx, area, w, nx_out, chunk_starts
         As for `_count_rows`.
-    offsets : ndarray of int64, shape (n_chunks, ny_out)
-        First slot of each chunk in each output row.
+    y0, x0 : int
+        First output row and column of the box.
+    offsets : ndarray of int64, shape (n_chunks, box_ny)
+        First slot of each chunk in each row of the box.
     row_cols, row_ins, row_values : ndarray, shape (nnz,)
-        Output column, input index and value of each entry, filled in place.
+        Column in the box, input index and value of each entry, filled in
+        place.
     """
     for c in numba.prange(chunk_starts.size - 1):
         cursor = offsets[c].copy()
         for k in range(chunk_starts[c], chunk_starts[c + 1]):
             value = area[k] * w[in_idx[k]]
             if value != 0.0:
-                row = out_idx[k] // nx_out
+                out_row = out_idx[k] // nx_out
+                row = out_row - y0
                 slot = cursor[row]
                 cursor[row] += 1
-                row_cols[slot] = out_idx[k] - row * nx_out
+                row_cols[slot] = out_idx[k] - out_row * nx_out - x0
                 row_ins[slot] = in_idx[k]
                 row_values[slot] = value
 
 
 @numba.njit(parallel=True, cache=True)
-def _sort_rows(row_starts, nx_out, row_cols, row_ins, row_values, indptr, indices, data):
-    """Sort the entries of each output row by column, keeping their order within a column.
+def _sort_rows(row_starts, box_nx, row_cols, row_ins, row_values, indptr, indices, data):
+    """Sort the entries of each row of the box by column, keeping their order within a column.
 
     Parameters
     ----------
-    row_starts : ndarray of int64, shape (ny_out + 1,)
-        Entry range of each output row.
-    nx_out : int
+    row_starts : ndarray of int64, shape (box_ny + 1,)
+        Entry range of each row of the box.
+    box_nx : int
     row_cols, row_ins, row_values : ndarray, shape (nnz,)
         From `_bucket_rows`.
     indptr, indices, data : ndarray
@@ -267,12 +356,12 @@ def _sort_rows(row_starts, nx_out, row_cols, row_ins, row_values, indptr, indice
         lo = row_starts[row]
         hi = row_starts[row + 1]
         # starts[col] is the first slot of column col, relative to lo
-        starts = np.zeros(nx_out + 1, dtype=np.int64)
+        starts = np.zeros(box_nx + 1, dtype=np.int64)
         for slot in range(lo, hi):
             starts[row_cols[slot] + 1] += 1
-        for col in range(nx_out):
+        for col in range(box_nx):
             starts[col + 1] += starts[col]
-            indptr[row * nx_out + col + 1] = lo + starts[col + 1]
+            indptr[row * box_nx + col + 1] = lo + starts[col + 1]
         for slot in range(lo, hi):
             dst = lo + starts[row_cols[slot]]
             starts[row_cols[slot]] += 1
@@ -281,7 +370,7 @@ def _sort_rows(row_starts, nx_out, row_cols, row_ins, row_values, indptr, indice
 
 
 @numba.njit(parallel=True, cache=True, error_model="numpy")
-def _add_data(indptr, indices, values, data, iscale, num, wsum, ctx, mask):
+def _add_data(indptr, indices, values, y0, x0, box_ny, box_nx, nx_out, data, iscale, num, wsum, ctx, mask):
     """Add ``W @ (data * iscale)`` to num and ``W @ 1`` to wsum, and set ``mask`` in ctx where a row of W has a positive entry.
 
     drizzle sets the context bit for any positive contribution.  Rows
@@ -290,47 +379,55 @@ def _add_data(indptr, indices, values, data, iscale, num, wsum, ctx, mask):
     Parameters
     ----------
     indptr, indices, values : ndarray
-        CSR arrays of W.
+        CSR arrays of W, one row per pixel of the box.
+    y0, x0, box_ny, box_nx : int
+        First output row and column and shape of the box.
+    nx_out : int
     data : ndarray, shape (n_in,)
     iscale : float
     num, wsum : ndarray of float64, shape (n_out,)
     ctx : ndarray of int32, shape (n_out,)
     mask : int32
     """
-    for row in numba.prange(indptr.size - 1):
-        if indptr[row] == indptr[row + 1]:
-            continue
-        s = 0.0
-        sw = 0.0
-        hit = False
-        for k in range(indptr[row], indptr[row + 1]):
-            w = values[k]
-            s += w * (data[indices[k]] * iscale)
-            sw += w
-            hit |= w > 0.0
-        num[row] += s
-        wsum[row] += sw
-        if hit:
-            ctx[row] |= mask
+    for by in numba.prange(box_ny):
+        for bx in range(box_nx):
+            row = by * box_nx + bx
+            if indptr[row] == indptr[row + 1]:
+                continue
+            s = 0.0
+            sw = 0.0
+            hit = False
+            for k in range(indptr[row], indptr[row + 1]):
+                w = values[k]
+                s += w * (data[indices[k]] * iscale)
+                sw += w
+                hit |= w > 0.0
+            o = (y0 + by) * nx_out + x0 + bx
+            num[o] += s
+            wsum[o] += sw
+            if hit:
+                ctx[o] |= mask
 
 
 @numba.njit(parallel=True, cache=True, error_model="numpy")
-def _add_variance(indptr, indices, values, var, iscale2, vnum):
+def _add_variance(indptr, indices, values, y0, x0, box_ny, box_nx, nx_out, var, iscale2, vnum):
     """Add ``(W * W) @ (var * iscale2)`` to vnum; rows without entries are left alone.
 
     Parameters
     ----------
-    indptr, indices, values : ndarray
-        CSR arrays of W.
+    indptr, indices, values, y0, x0, box_ny, box_nx, nx_out
+        As for `_add_data`.
     var : ndarray, shape (n_in,)
     iscale2 : float
     vnum : ndarray of float64, shape (n_out,)
     """
-    for row in numba.prange(indptr.size - 1):
-        if indptr[row] == indptr[row + 1]:
-            continue
-        s = 0.0
-        for k in range(indptr[row], indptr[row + 1]):
-            w = values[k]
-            s += w * w * (var[indices[k]] * iscale2)
-        vnum[row] += s
+    for by in numba.prange(box_ny):
+        for bx in range(box_nx):
+            row = by * box_nx + bx
+            if indptr[row] == indptr[row + 1]:
+                continue
+            s = 0.0
+            for k in range(indptr[row], indptr[row + 1]):
+                w = values[k]
+                s += w * w * (var[indices[k]] * iscale2)
+            vnum[(y0 + by) * nx_out + x0 + bx] += s
