@@ -25,6 +25,9 @@ First release.
   which for NIRCam is about 40 times faster and differs from the full
   evaluation by at most 2e-8 pixel; `stepsize=1` evaluates every pixel,
   on several threads.
+- `Covariance`: the covariance between nearby pixels of the co-added
+  image, for independent input noise, as one image per pixel offset up
+  to a radius; its zero offset equals `Coadd.out_var` bit for bit.
 - `Coadd`: the weighted mean of exposures on one output grid, with any
   number of variance planes and drizzle's context image, summed in
   float64 and divided once at the end.
@@ -35,6 +38,8 @@ First release.
   drizzle's C square kernel.
 - `benchmarks/compare_jwst.py`: drizzles JWST `cal` or `crf` files with
   drizzle and spizzle, compares the outputs and times both.
+- `benchmarks/check_covariance.py`: checks `Covariance` against noise
+  realizations and the noise correction of Casertano et al. (2000).
 - Tests against drizzle with float64 output arrays: single-pixel
   operator columns, weights, science and variance for several `pixfrac`,
   rotations, scales, a mirrored input, NaN pixels of zero weight,

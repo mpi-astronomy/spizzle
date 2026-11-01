@@ -149,6 +149,8 @@ def build_operator(triplets, jaco, out_shape, weights=None, weight_scale=1.0):
     data = np.empty(nnz)
     _sort_rows(row_starts, box_nx, row_cols, row_ins, row_values, indptr, indices, data)
     matrix = sparse.csr_array((data, indices, indptr), shape=(box_ny * box_nx, jaco.size))
+    # each output pixel's entries are in input pixel order, so scipy need not check
+    matrix.has_sorted_indices = True
     return Operator(matrix, (slice(y0, y1), slice(x0, x1)), (ny_out, nx_out))
 
 
@@ -219,19 +221,8 @@ class Coadd:
         iscale : float
             Factor applied to the data, and its square to the variances.
         """
-        if isinstance(W, Operator):
-            if tuple(W.out_shape) != self.out_shape:
-                raise ValueError(f"operator for output shape {tuple(W.out_shape)} does not match output shape {self.out_shape}")
-            matrix = sparse.csr_array(W.matrix)
-            y0, x0 = W.box[0].start, W.box[1].start
-            box_ny, box_nx = W.box_shape
-        else:
-            matrix = sparse.csr_array(W)
-            y0, x0 = 0, 0
-            box_ny, box_nx = self.out_shape
         data = np.asarray(data, dtype=np.float64)
-        if matrix.shape != (box_ny * box_nx, data.size):
-            raise ValueError(f"operator shape {matrix.shape} does not match {box_ny * box_nx} output pixels and {data.size} data")
+        matrix, y0, x0, box_ny, box_nx = _box_rows(W, self.out_shape, data.size)
         if len(variances) != len(self._vnum):
             raise ValueError(f"expected {len(self._vnum)} variance planes, got {len(variances)}")
 
@@ -273,6 +264,40 @@ class Coadd:
         nonzero = self._wsum != 0.0
         out[nonzero] = num[nonzero] / den[nonzero]
         return out.reshape(self.out_shape)
+
+
+def _box_rows(W, out_shape, n_in):
+    """CSR rows of an operator and the box of the output grid that they cover.
+
+    Parameters
+    ----------
+    W : Operator or scipy.sparse array
+        As for `Coadd.add`.
+    out_shape : tuple of int
+        ``(ny_out, nx_out)`` of the grid it is added to.
+    n_in : int
+        Number of input pixels it is applied to.
+
+    Returns
+    -------
+    matrix : scipy.sparse.csr_array
+        One row per pixel of the box.
+    y0, x0, box_ny, box_nx : int
+        First output row and column and shape of the box.
+    """
+    if isinstance(W, Operator):
+        if tuple(W.out_shape) != tuple(out_shape):
+            raise ValueError(f"operator for output shape {tuple(W.out_shape)} does not match output shape {tuple(out_shape)}")
+        matrix = sparse.csr_array(W.matrix)
+        y0, x0 = W.box[0].start, W.box[1].start
+        box_ny, box_nx = W.box_shape
+    else:
+        matrix = sparse.csr_array(W)
+        y0, x0 = 0, 0
+        box_ny, box_nx = out_shape
+    if matrix.shape != (box_ny * box_nx, n_in):
+        raise ValueError(f"operator shape {matrix.shape} does not match {box_ny * box_nx} output pixels and {n_in} data")
+    return matrix, y0, x0, box_ny, box_nx
 
 
 @numba.njit(parallel=True, cache=True, error_model="numpy")

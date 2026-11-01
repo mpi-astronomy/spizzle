@@ -126,7 +126,7 @@ not needed for the first benchmark.
 ### 5.5 Covariance (stretch)
 `Cov_out = W Σ_in Wᵀ` with `Σ_in` diagonal → `(W.multiply(W @ diag)) @ Wᵀ`
 restricted to a band. Enough to quantify pixel–pixel correlation vs. the usual
-Casertano correction factor.
+Casertano correction factor. Done as `Covariance`, see §11.3.
 
 ## 6. Repository strategy
 
@@ -497,3 +497,65 @@ Findings:
    - corners evaluated from the spline instead of bilinear interpolation
      of the pixel map would be more accurate, but no longer
      bit-identical to drizzle (see §5.1).
+
+3. **Noise covariance** (§5.5). Done, 2026-11-01: `Covariance(out_shape,
+   radius=2, fillval=nan)`, a separate accumulator next to `Coadd`.
+   `add(op, var, iscale=1.0)` takes the same operator and one variance
+   image per exposure (e.g. the sum of its variance planes) and keeps its
+   own weight sums. `offsets` lists the `(dy, dx)` kept, half of those
+   within `radius` (`(0, 0)`, `(0, 1..r)`, `(1..r, -r..r)`: 13 for r=2);
+   `out_cov[k][y, x]` is `Cov(img[y, x], img[y + dy, x + dx])`, the sum
+   over exposures of `(W diag(var) W.T)[o, o']` over `wsum[o] wsum[o']`.
+   Each entry is the dot product of two CSR rows of `W` weighted by the
+   variance, merged on their sorted input indices, in parallel over the
+   rows of the box; `build_operator` marks its indices as sorted. Offset
+   (0, 0) equals `Coadd.out_var` bit for bit. Pixels farther apart than an
+   input pixel's footprint share no input and have no covariance, so
+   `radius >= ceil(pixfrac * p * sqrt(2))` (p: input pixel size in output
+   pixels) gives all of it: 2 at native scale with pixfrac 1, 3 at 2×
+   with pixfrac 0.8.
+
+   Checks (`tests/test_covariance.py`, `benchmarks/check_covariance.py`):
+   - against the dense `sum W diag(var) W.T / outer(wsum, wsum)` of two
+     rotated, weighted exposures: equal to 1e-12 at every offset;
+   - 4000 noise realizations through `Coadd` (60×80 input rotated 33°,
+     1.6×, pixfrac 0.8, random weights and variances): at each of the 13
+     offsets, (sample − predicted) / statistical error over ~12 000
+     pixels has mean within ±0.03 and standard deviation 0.99-1.01;
+   - noise ratio R of large areas for 16 exposures at random sub-pixel
+     offsets, uniform noise, against Casertano et al. (2000),
+     `1 / (1 - r/3)` (r ≤ 1) and `r / (1 - 1/(3r))` (r ≥ 1), r = pixfrac
+     / s:
+
+     | pixfrac | s | r | R, `Covariance` | R, Casertano |
+     | ---: | ---: | ---: | ---: | ---: |
+     | 0.5 | 0.5 | 1.000 | 1.523 | 1.500 |
+     | 0.5 | 0.75 | 0.667 | 1.304 | 1.286 |
+     | 0.5 | 1.0 | 0.500 | 1.196 | 1.200 |
+     | 0.75 | 0.5 | 1.500 | 1.947 | 1.929 |
+     | 0.75 | 0.75 | 1.000 | 1.512 | 1.500 |
+     | 0.75 | 1.0 | 0.750 | 1.328 | 1.333 |
+     | 1.0 | 0.5 | 2.000 | 2.400 | 2.400 |
+     | 1.0 | 0.75 | 1.333 | 1.778 | 1.778 |
+     | 1.0 | 1.0 | 1.000 | 1.495 | 1.500 |
+
+     Within 1.5%; R is the ratio of noise, not of variance. With a single
+     exposure and pixfrac < 1 the drops leave uneven weights and the
+     formula does not apply (R 1.55 against 1.29 at pixfrac 0.5, s 0.75).
+   - NIRCam (one `nrcalong` exposure, radius 2): `Covariance.add` 0.11 s
+     on the native mosaic (5579×4380, 13 planes = 2.4 GiB). On the 2×
+     mosaic (11152×8755) 0.64 s, but radius 2 is short of the 3 needed
+     there and the 13 planes take 9.5 GiB, so the laptop was short of
+     memory.
+
+   Open:
+   - memory on mosaics: `2r(r+1) + 1` output-sized float64 planes
+     (25 planes, 18 GiB, for the complete 2× NIRCam mosaic at r=3).
+     Options: float32 planes once summed, covariance only for a region,
+     or per exposure on its box;
+   - `Operator` could record the largest offset between output pixels
+     that share an input pixel, so that `Covariance` can pick or check
+     the radius;
+   - a correlation helper (`cov / sqrt(var var')`) and the large-area
+     noise ratio for a region, as used for aperture photometry.
+

@@ -23,6 +23,8 @@ image is those sums divided by the output weights.
    variance planes and drizzle's context image
  - `pixel_map`: the pixel map of an exposure from its WCS and the output
    WCS, by default interpolated from the WCS on a coarse grid
+ - `Covariance`: the covariance between nearby pixels of the co-added
+   image, for independent input noise
 
 
 # How it compares with drizzle
@@ -129,6 +131,30 @@ triplets = overlap_triplets(c, out_shape)
 jaco = jacobian(c)
 op = build_operator(triplets, jaco, out_shape, weights=weights)
 ```
+
+Drizzling correlates the noise of neighboring output pixels.
+`Covariance` adds up `W diag(var) W.T` for the same operators, one
+variance image per exposure, and normalizes it like the image:
+
+```python
+from spizzle import Covariance
+
+cov = Covariance(out_shape, radius=2)
+for data, var, weights, wcs in exposures:
+    ...
+    coadd.add(op, data, variances=[var])
+    cov.add(op, var)
+
+cov.offsets   # (13, 2): the offsets (dy, dx) kept, half of those within radius
+cov.out_cov   # (13, ny, nx): Cov(image[y, x], image[y + dy, x + dx])
+```
+
+Pixels farther apart than an input pixel's footprint on the output grid
+are uncorrelated, so `radius = ceil(pixfrac * p * sqrt(2))`, with `p` the
+input pixel size in output pixels, gives the whole covariance.  Checked
+against noise realizations, and for evenly dithered exposures it gives the
+large-area noise correction of Casertano et al. (2000) to about 1%
+(`benchmarks/check_covariance.py`).
 
 The geometry, `build_operator` and `Coadd.add` run on numba's threads;
 set their number with `numba.set_num_threads` or the `NUMBA_NUM_THREADS`

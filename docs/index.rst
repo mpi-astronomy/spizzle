@@ -36,6 +36,10 @@ center, shape ``(ny, nx, 2)``, NaN where an input pixel has no mapping.
 default from the WCS on every 16th pixel, interpolated with bicubic
 splines.
 
+`Covariance` gives the covariance between nearby pixels of the image, for
+independent input noise: add the same operators to it as to `Coadd`, each
+with the variance of its exposure.
+
 Reference
 ---------
 
