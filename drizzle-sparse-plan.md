@@ -475,17 +475,25 @@ Findings:
    in row blocks of 64 on numba's thread count, for `stepsize=1` or when
    the grid has a non-finite value. No runtime dependency on drizzle. On
    the 8 `nrcalong` exposures of §7.1: 0.075 s per exposure against 0.84 s
-   for `calc_pixmap`, at most 2.2e-8 pixel apart. An exposure through
-   spizzle now takes ~0.34 s (pixel map, operator, `Coadd.add`) against
-   ~1.27 s for `calc_pixmap` and drizzle.
+   for `calc_pixmap`, at most 2.2e-8 pixel apart.
+
+   Then the spline evaluated as sparse matrix products, `By @ (C @ Bx.T)`
+   with the B-spline basis matrices By and Bx (`order + 1` non-zeros per
+   row), instead of `RectBivariateSpline.__call__`: 0.030 s → 0.004 s per
+   coordinate on 2048², within 2e-12 of scipy's values, on one thread so
+   independent of BLAS threading (dense BLAS took 0.0056 s). Grouping the
+   product so that the result comes out in row order, and skipping the
+   NaN fill when every pixel is inside the box, removed another 27 ms of
+   copying. `pixel_map` now takes 0.022 s per exposure (best of 5; 38×
+   faster than `calc_pixmap`), still at most 2.2e-8 pixel from it: ~10 ms
+   splines, ~3 ms WCS on the coarse grid, ~8 ms filling the pixel map. An
+   exposure through spizzle takes ~0.28 s (pixel map, operator,
+   `Coadd.add`) against ~1.27 s for `calc_pixmap` and drizzle.
 
    Still open:
    - frame conversion: adopt drizzle PR #249's `frame_check` once it is
      merged; until then both WCS must share the celestial frame, as for
      drizzle's current `calc_pixmap`;
-   - the spline evaluation (0.065 s, scipy holds the GIL) is now most of
-     `pixel_map`; the tensor-product B-spline could be evaluated as two
-     matrix products, which BLAS runs on several threads;
    - corners evaluated from the spline instead of bilinear interpolation
      of the pixel map would be more accurate, but no longer
      bit-identical to drizzle (see §5.1).

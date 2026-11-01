@@ -69,7 +69,7 @@ exposures on a common mosaic frame the two agree to better than 2e-12
 (most pixels better than 1e-15) against drizzle computing in float64, and
 spizzle takes 0.26 s per exposure against drizzle's 0.42 s.  Evaluating
 the WCS for every pixel with `drizzle.utils.calc_pixmap` takes 0.84 s;
-spizzle's `pixel_map` takes 0.075 s and differs from it by at most 2e-8
+spizzle's `pixel_map` takes 0.022 s and differs from it by at most 2e-8
 pixel.
 
 

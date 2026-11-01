@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numba
 import numpy as np
-from scipy.interpolate import RectBivariateSpline
+from scipy.interpolate import BSpline, RectBivariateSpline
 
 __all__ = [
     "pixel_map",
@@ -151,11 +151,44 @@ def _interpolated(wcs_from, wcs_to, shape, box, stepsize, order):
 
     x_all = np.arange(x0, x1 + 1, dtype=np.float64)
     y_all = np.arange(y0, y1 + 1, dtype=np.float64)
-    pixmap = np.full(tuple(shape) + (2,), np.nan)
-    for q, grid in enumerate((xo, yo)):
-        spline = RectBivariateSpline(y_grid, x_grid, grid, kx=order, ky=order)
-        pixmap[y0:y1 + 1, x0:x1 + 1, q] = spline(y_all, x_all)
+    if (x0, x1, y0, y1) == (0, shape[1] - 1, 0, shape[0] - 1):
+        pixmap = np.empty(tuple(shape) + (2,))
+    else:
+        pixmap = np.full(tuple(shape) + (2,), np.nan)
+    for q, values in enumerate((xo, yo)):
+        pixmap[y0:y1 + 1, x0:x1 + 1, q] = _spline_on_grid(y_grid, x_grid, values, order, y_all, x_all)
     return pixmap
+
+
+def _spline_on_grid(y_grid, x_grid, values, order, y_all, x_all):
+    """Interpolating spline through ``values`` on a grid, evaluated on another grid.
+
+    The tensor-product spline on the grid ``y_all`` by ``x_all`` is
+    ``By @ C @ Bx.T``, with C its coefficients and By, Bx the B-spline
+    basis matrices of ``y_all`` and ``x_all``, which have ``order + 1``
+    non-zero entries per row.  As sparse matrix products this is several
+    times faster than scipy's evaluation of the same spline.
+
+    Parameters
+    ----------
+    y_grid, x_grid : ndarray
+        Increasing coordinates of the grid of ``values``.
+    values : ndarray, shape (y_grid.size, x_grid.size)
+    order : int
+        Degree of the spline in each coordinate.
+    y_all, x_all : ndarray
+        Increasing coordinates to evaluate at, within the grid.
+
+    Returns
+    -------
+    ndarray, shape (y_all.size, x_all.size)
+    """
+    ty, tx, c = RectBivariateSpline(y_grid, x_grid, values, kx=order, ky=order).tck
+    coefficients = c.reshape(ty.size - order - 1, tx.size - order - 1)
+    by = BSpline.design_matrix(y_all, ty, order)
+    bx = BSpline.design_matrix(x_all, tx, order)
+    # By @ (C @ Bx.T), so that the result comes out in row order
+    return by @ np.ascontiguousarray((bx @ coefficients.T).T)
 
 
 def _evaluated(wcs_from, wcs_to, shape, threads):

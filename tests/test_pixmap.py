@@ -1,8 +1,10 @@
 import numpy as np
 import pytest
 from drizzle.utils import calc_pixmap
+from scipy.interpolate import RectBivariateSpline
 
 from spizzle import pixel_map
+from spizzle.pixmap import _spline_on_grid
 
 SHAPE = (200, 300)
 
@@ -118,6 +120,20 @@ def test_pixel_map_takes_the_shape_from_the_input_wcs():
     pixmap = pixel_map(InputWCS(), OutputWCS())
 
     assert pixmap.shape == (200, 300, 2)
+
+
+def test_spline_on_grid_matches_scipy():
+    """_spline_on_grid of a bicubic spline through a 12x15 grid gives scipy's RectBivariateSpline values to 1e-12."""
+    y_grid = np.linspace(0.0, 110.0, 12)
+    x_grid = np.linspace(0.0, 140.0, 15)
+    values = np.random.default_rng(1).uniform(-1.0, 1.0, (12, 15))
+    y_all = np.arange(111.0)
+    x_all = np.arange(141.0)
+    expected = RectBivariateSpline(y_grid, x_grid, values, kx=3, ky=3)(y_all, x_all)
+
+    result = _spline_on_grid(y_grid, x_grid, values, 3, y_all, x_all)
+
+    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-12)
 
 
 def test_pixel_map_rejects_order_2():
