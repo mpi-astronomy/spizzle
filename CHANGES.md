@@ -20,6 +20,8 @@ First release.
 - Every input pixel with a valid pixel map is drizzled, so output pixels
   at the edges keep all their weight when the inputs extend past the
   output frame; drizzle skips input pixels centred outside the frame.
+- `benchmarks/bench_spizzle.py`: timings and peak memory against
+  drizzle's C square kernel.
 - Tests against drizzle with float64 output arrays: single-pixel
   operator columns, weights, science and variance for several `pixfrac`,
   rotations, scales, a mirrored input, NaN pixels of zero weight,

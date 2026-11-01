@@ -48,6 +48,19 @@ The differences:
    and contribute nothing.
 
 
+# Speed
+
+`benchmarks/bench_spizzle.py` times spizzle against drizzle's C kernel.
+On an Apple M3 Pro (11 threads), for a 2048x2048 exposure drizzled at 2x
+oversampling with `pixfrac=0.8`, building `W` takes 0.26 s and
+`Coadd.add` about 0.02 s per plane.  The science data with three variance
+planes take 0.32 s, against 0.72 s for drizzle with the variance planes in
+the same call; each further pass over the same geometry, such as a noise
+realisation, costs about 0.02 s, against 0.56 s for a drizzle call.  On a
+single thread spizzle is slower than drizzle.  The peak memory is higher:
+3.0 GiB for the exposure with three variance planes, against 1.25 GiB.
+
+
 # Installation
 
     pip install git+https://github.com/mpi-astronomy/spizzle
