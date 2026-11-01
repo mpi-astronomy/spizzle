@@ -4,14 +4,13 @@ spizzle resamples images with the square kernel of
 [drizzle](https://github.com/spacetelescope/drizzle), written out as an
 explicit sparse matrix.  Drizzling an exposure is a linear map `W @ data`,
 and `W` depends on the pixel map, `pixfrac` and the input weights, not on
-the data.  spizzle builds `W` once per exposure, with the overlap geometry
-computed in parallel, and applies it to the science data, the weights and
-every variance plane.  The sums are kept in float64 and divided once at
-the end, instead of updating a float32 weighted mean for every
-contribution.  `W` itself is there for noise propagation: with
-independent input noise the covariance of the weighted sums `W @ data`
-is `W @ diag(var) @ W.T`, and the output image is those sums divided by
-the output weights.
+the data.  spizzle builds `W` once per exposure and applies it to the
+science data, the weights and every variance plane, both in parallel.
+The sums are kept in float64 and divided once at the end, instead of
+updating a float32 weighted mean for every contribution.  `W` itself is
+there for noise propagation: with independent input noise the covariance
+of the weighted sums `W @ data` is `W @ diag(var) @ W.T`, and the output
+image is those sums divided by the output weights.
 
  - `drizzle_operator`: the operator of one exposure, a `scipy.sparse`
    CSR array of shape (output pixels, input pixels)
@@ -112,8 +111,10 @@ jaco = jacobian(c)
 W = build_operator(triplets, jaco, out_shape, weights=weights)
 ```
 
-The overlap geometry runs on numba's threads; set their number with
-`numba.set_num_threads` or the `NUMBA_NUM_THREADS` environment variable.
+The geometry, `build_operator` and `Coadd.add` run on numba's threads;
+set their number with `numba.set_num_threads` or the `NUMBA_NUM_THREADS`
+environment variable.  The results do not depend on the number of
+threads.
 
 
 # Citing spizzle

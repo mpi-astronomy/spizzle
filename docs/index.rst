@@ -4,10 +4,10 @@ spizzle
 Drizzle's square kernel written out as an explicit sparse linear operator.
 Drizzling an exposure is the linear map ``W @ data``, and ``W`` depends on
 the pixel map, ``pixfrac`` and the input weights, not on the data.  spizzle
-builds ``W`` once per exposure, with the overlap geometry computed in
-parallel, and applies it to the science data, the weights and every
-variance plane, summing in float64 and dividing once at the end.  The
-README of the repository describes how the results compare with drizzle.
+builds ``W`` once per exposure and applies it to the science data, the
+weights and every variance plane, both in parallel, summing in float64 and
+dividing once at the end.  The README of the repository describes how the
+results compare with drizzle.
 
 Usage
 -----

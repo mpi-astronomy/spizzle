@@ -1,7 +1,9 @@
+import numba
 import numpy as np
 import pytest
+from scipy import sparse
 
-from spizzle import Coadd, drizzle_operator
+from spizzle import Coadd, build_operator, corners, drizzle_operator, jacobian, overlap_triplets
 
 
 def identity_pixmap(shape):
@@ -24,6 +26,14 @@ def rotated_pixmap(shape, degrees, scale, centre):
 def random_image(shape, low, high, seed):
     """Uniform random image between ``low`` and ``high``."""
     return np.random.default_rng(seed).uniform(low, high, shape)
+
+
+def scipy_operator(triplets, jaco, out_shape, weights):
+    """The operator as scipy builds it from the triplets: area * weight / jaco, zero entries left out."""
+    in_idx, out_idx, area = triplets
+    values = area * (weights / jaco).ravel()[in_idx]
+    keep = values != 0.0
+    return sparse.csr_array((values[keep], (out_idx[keep], in_idx[keep])), shape=(out_shape[0] * out_shape[1], jaco.size))
 
 
 def test_drizzle_operator_of_identity_pixmap():
@@ -64,6 +74,52 @@ def test_drizzle_operator_rejects_weights_of_another_shape():
     """drizzle_operator of a 5x6 pixel map with 5x5 weights raises ValueError."""
     with pytest.raises(ValueError, match="weights shape"):
         drizzle_operator(identity_pixmap((5, 6)), (5, 6), weights=np.ones((5, 5)))
+
+
+def test_build_operator_matches_scipy():
+    """build_operator of a rotated, weighted exposure gives the same CSR arrays as scipy builds from its triplets."""
+    c = corners(rotated_pixmap((30, 40), 33.0, 1.6, (55.0, 50.0)), 0.8)
+    triplets = overlap_triplets(c, (100, 110))
+    weights = random_image((30, 40), 0.5, 1.5, seed=9)
+    expected = scipy_operator(triplets, jacobian(c), (100, 110), weights)
+
+    W = build_operator(triplets, jacobian(c), (100, 110), weights=weights)
+
+    np.testing.assert_array_equal(W.indptr, expected.indptr)
+    np.testing.assert_array_equal(W.indices, expected.indices)
+    np.testing.assert_array_equal(W.data, expected.data)
+
+
+def test_build_operator_with_zero_weights_matches_scipy():
+    """build_operator of a rotated exposure with 120 zero weights gives the same CSR arrays as scipy without those entries."""
+    c = corners(rotated_pixmap((30, 40), 33.0, 1.6, (55.0, 50.0)), 0.8)
+    triplets = overlap_triplets(c, (100, 110))
+    weights = random_image((30, 40), 0.5, 1.5, seed=10)
+    weights.flat[np.random.default_rng(11).choice(weights.size, 120, replace=False)] = 0.0
+    expected = scipy_operator(triplets, jacobian(c), (100, 110), weights)
+
+    W = build_operator(triplets, jacobian(c), (100, 110), weights=weights)
+
+    np.testing.assert_array_equal(W.indptr, expected.indptr)
+    np.testing.assert_array_equal(W.indices, expected.indices)
+    np.testing.assert_array_equal(W.data, expected.data)
+
+
+def test_build_operator_same_on_one_thread():
+    """build_operator of a rotated exposure on one numba thread gives the same CSR arrays as on all threads."""
+    c = corners(rotated_pixmap((30, 40), 33.0, 1.6, (55.0, 50.0)), 0.8)
+    triplets = overlap_triplets(c, (100, 110))
+    W_all = build_operator(triplets, jacobian(c), (100, 110))
+
+    numba.set_num_threads(1)
+    try:
+        W_one = build_operator(triplets, jacobian(c), (100, 110))
+    finally:
+        numba.set_num_threads(numba.config.NUMBA_NUM_THREADS)
+
+    np.testing.assert_array_equal(W_one.indptr, W_all.indptr)
+    np.testing.assert_array_equal(W_one.indices, W_all.indices)
+    np.testing.assert_array_equal(W_one.data, W_all.data)
 
 
 def test_drizzle_operator_full_weight_at_the_output_edge():
@@ -218,6 +274,19 @@ def test_coadd_context_of_33_exposures_adds_a_plane():
         coadd.add(W, np.ones((3, 4)))
 
     np.testing.assert_array_equal(coadd.out_ctx[1], np.ones((3, 4), dtype=np.int32))
+
+
+def test_coadd_accepts_csc_operator():
+    """Coadd.add of a rotated exposure's operator as a CSC array gives the same out_img as the CSR array."""
+    data = random_image((30, 40), 10.0, 20.0, seed=12)
+    W = drizzle_operator(rotated_pixmap((30, 40), 33.0, 1.6, (55.0, 50.0)), (100, 110), pixfrac=0.8)
+    csr = Coadd((100, 110))
+    csc = Coadd((100, 110))
+
+    csr.add(W, data)
+    csc.add(sparse.csc_array(W), data)
+
+    np.testing.assert_array_equal(csc.out_img, csr.out_img)
 
 
 def test_coadd_rejects_operator_of_another_shape():

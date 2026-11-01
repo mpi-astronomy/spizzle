@@ -11,9 +11,10 @@ First release.
   weights and weight scale.  Its steps, `corners`, `jacobian`,
   `overlap_triplets` and `build_operator`, are public so that the overlap
   geometry can be kept and re-weighted.
-- `overlap_triplets` computes the overlap areas with drizzle's `boxer`
-  and `sgarea`, ported to numba, in parallel over input rows; the results
-  do not depend on the number of threads.
+- `corners`, `jacobian`, `overlap_triplets`, `build_operator` and
+  `Coadd.add` run in parallel on numba's threads; the results do not
+  depend on the number of threads.  `overlap_triplets` computes the
+  overlap areas with drizzle's `boxer` and `sgarea`, ported to numba.
 - `Coadd`: the weighted mean of exposures on one output grid, with any
   number of variance planes and drizzle's context image, summed in
   float64 and divided once at the end.

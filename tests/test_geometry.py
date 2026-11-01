@@ -86,6 +86,13 @@ def test_corners_of_identity_pixmap(pixfrac):
     np.testing.assert_array_equal(c, expected_corners((8, 9), pixfrac / 2))
 
 
+def test_corners_of_identity_pixmap_of_three_rows():
+    """corners of a 3x5 identity pixel map, all of whose pixels are edge pixels, are at x -/+ 0.25, y -/+ 0.25 of each pixel."""
+    c = corners(identity_pixmap((3, 5)), 0.5)
+
+    np.testing.assert_array_equal(c, expected_corners((3, 5), 0.25))
+
+
 def test_corners_nan_in_pixmap():
     """corners of an 8x8 identity pixel map with NaN at pixel (3, 3) are NaN for the 3x3 pixels around it only."""
     pixmap = identity_pixmap((8, 8))
@@ -121,6 +128,12 @@ def test_jacobian_of_identity_pixmap():
     jaco = jacobian(corners(identity_pixmap((6, 7)), 0.8))
 
     np.testing.assert_allclose(jaco, np.full((6, 7), 0.64), rtol=1e-14)
+
+
+def test_jacobian_rejects_corners_without_four_corners():
+    """jacobian of an array of shape (6, 7, 3, 2) raises ValueError."""
+    with pytest.raises(ValueError, match="shape"):
+        jacobian(np.zeros((6, 7, 3, 2)))
 
 
 def test_jacobian_of_flipped_pixmap_is_negative():

@@ -7,12 +7,12 @@ area of that quadrilateral inside each output pixel it touches is the
 geometry of the drizzle operator: it depends on the pixel map and
 ``pixfrac`` only, not on the data or the weights.
 
-`corners` and `jacobian` are numpy ports of ``interpolate_four_points``,
+`corners` and `jacobian` port ``interpolate_four_points``,
 ``interpolate_point`` and the Jacobian in ``do_kernel_square`` of
 spacetelescope/drizzle, with the same corner order and the same order of
-floating point operations.  `overlap_triplets` runs drizzle's ``boxer``
-and ``sgarea``, ported to numba, over every input pixel, in parallel over
-input rows.  Unlike drizzle, which visits only the input pixels whose
+floating point operations, and `overlap_triplets` runs drizzle's ``boxer``
+and ``sgarea`` over every input pixel.  All three are compiled with numba
+and run in parallel over input rows.  Unlike drizzle, which visits only the input pixels whose
 centres fall inside the output frame, every input pixel with finite
 corners is visited, so output pixels at the edges get all of their
 overlap.
@@ -66,88 +66,7 @@ def corners(pixmap, pixfrac=1.0):
         raise ValueError(f"pixmap must be at least 2x2, not {ny}x{nx}")
     if not pixfrac > 0.001:
         raise ValueError(f"pixfrac must be larger than 0.001 (drizzle switches to the point kernel), not {pixfrac}")
-    h = 0.5 * pixfrac
-    out = np.empty((ny, nx, 4, 2))
-
-    edge = np.ones((ny, nx), dtype=bool)
-    edge[1:ny - 2, 1:nx - 2] = False
-    j, i = np.nonzero(edge)
-    x = i.astype(np.float64)
-    y = j.astype(np.float64)
-    for k, (sx, sy) in enumerate([(-1, 1), (1, 1), (1, -1), (-1, -1)]):
-        out[j, i, k] = _interpolate_point(pixmap, x + sx * h, y + sy * h)
-
-    if ny > 3 and nx > 3:
-        out[1:ny - 2, 1:nx - 2] = _interpolate_four_points(pixmap, h)
-    return out
-
-
-def _interpolate_point(pixmap, xin, yin):
-    """Bilinear interpolation of the pixel map at input points, as drizzle's ``interpolate_point``.
-
-    Points beyond the outer pixel centres are extrapolated from the outer
-    2x2 block.
-
-    Parameters
-    ----------
-    pixmap : ndarray, shape (ny, nx, 2)
-    xin, yin : ndarray, shape (n,)
-        Input frame coordinates.
-
-    Returns
-    -------
-    ndarray, shape (n, 2)
-        Output ``x`` and ``y``.
-    """
-    ny, nx = pixmap.shape[:2]
-    i0 = np.clip(np.trunc(xin), 0, nx - 2).astype(np.intp)
-    j0 = np.clip(np.trunc(yin), 0, ny - 2).astype(np.intp)
-    x = (xin - i0)[:, None]
-    y = (yin - j0)[:, None]
-    x1 = 1.0 - x
-    y1 = 1.0 - y
-    f00 = pixmap[j0, i0]
-    f10 = pixmap[j0, i0 + 1]
-    f01 = pixmap[j0 + 1, i0]
-    f11 = pixmap[j0 + 1, i0 + 1]
-    return f00 * x1 * y1 + f10 * x * y1 + f01 * x1 * y + f11 * x * y
-
-
-def _interpolate_four_points(pixmap, h):
-    """Corners of the interior input pixels, as drizzle's ``interpolate_four_points``.
-
-    Each corner is the sum of four of the nine pixel map values around the
-    pixel, each premultiplied by its bilinear weight.
-
-    Parameters
-    ----------
-    pixmap : ndarray, shape (ny, nx, 2)
-    h : float
-        Half of ``pixfrac``.
-
-    Returns
-    -------
-    ndarray, shape (ny - 3, nx - 3, 4, 2)
-        Corners of input pixels ``1 <= y <= ny - 3``, ``1 <= x <= nx - 3``.
-    """
-    ny, nx = pixmap.shape[:2]
-
-    def f(a, b):
-        # pixel map at x offset a - 1 and y offset b - 1 from the pixel, times its weight
-        if a == 1 and b == 1:
-            fac = (1 - h) * (1 - h)
-        elif a == 1 or b == 1:
-            fac = (1 - h) * h
-        else:
-            fac = h * h
-        return pixmap[b:ny - 3 + b, a:nx - 3 + a] * fac
-
-    return np.stack([
-        f(0, 1) + f(1, 1) + f(0, 2) + f(1, 2),
-        f(1, 1) + f(2, 1) + f(1, 2) + f(2, 2),
-        f(1, 0) + f(2, 0) + f(1, 1) + f(2, 1),
-        f(0, 0) + f(1, 0) + f(0, 1) + f(1, 1),
-    ], axis=2)
+    return _corners(pixmap, 0.5 * pixfrac)
 
 
 def jacobian(corners):
@@ -167,9 +86,10 @@ def jacobian(corners):
     -------
     ndarray, shape (ny, nx)
     """
-    x = corners[..., 0]
-    y = corners[..., 1]
-    return 0.5 * ((x[..., 1] - x[..., 3]) * (y[..., 0] - y[..., 2]) - (x[..., 0] - x[..., 2]) * (y[..., 1] - y[..., 3]))
+    corners = np.asarray(corners, dtype=np.float64)
+    if corners.ndim != 4 or corners.shape[2:] != (4, 2):
+        raise ValueError(f"corners must have shape (ny, nx, 4, 2), not {corners.shape}")
+    return _jacobian(corners)
 
 
 def overlap_triplets(corners, out_shape):
@@ -216,6 +136,128 @@ def overlap_triplets(corners, out_shape):
     triplets = (np.empty(n, dtype=np.int64), np.empty(n, dtype=np.int64), np.empty(n, dtype=np.float64))
     _compact(starts, counts, new_starts, in_idx, out_idx, area, *triplets)
     return triplets
+
+
+@numba.njit(parallel=True, cache=True, error_model="numpy")
+def _corners(pixmap, h):
+    """Corners of every input pixel shrunk to half-width ``h``; see `corners`.
+
+    Parameters
+    ----------
+    pixmap : ndarray, shape (ny, nx, 2)
+    h : float
+        Half of ``pixfrac``.
+
+    Returns
+    -------
+    ndarray, shape (ny, nx, 4, 2)
+    """
+    ny, nx = pixmap.shape[0], pixmap.shape[1]
+    out = np.empty((ny, nx, 4, 2))
+    for j in numba.prange(ny):
+        for i in range(nx):
+            if 1 <= j <= ny - 3 and 1 <= i <= nx - 3:
+                _interpolate_four_points(pixmap, j, i, h, out)
+            else:
+                x = float(i)
+                y = float(j)
+                _interpolate_point(pixmap, x - h, y + h, out, j, i, 0)
+                _interpolate_point(pixmap, x + h, y + h, out, j, i, 1)
+                _interpolate_point(pixmap, x + h, y - h, out, j, i, 2)
+                _interpolate_point(pixmap, x - h, y - h, out, j, i, 3)
+    return out
+
+
+@numba.njit(cache=True, error_model="numpy")
+def _interpolate_point(pixmap, xin, yin, out, j, i, k):
+    """Bilinear interpolation of the pixel map at one input point, as drizzle's ``interpolate_point``.
+
+    Points beyond the outer pixel centres are extrapolated from the outer
+    2x2 block.
+
+    Parameters
+    ----------
+    pixmap : ndarray, shape (ny, nx, 2)
+    xin, yin : float
+        Input frame coordinates.
+    out : ndarray, shape (ny, nx, 4, 2)
+        Output ``x`` and ``y`` are written to ``out[j, i, k]``.
+    j, i, k : int
+        Input pixel and corner.
+    """
+    ny, nx = pixmap.shape[0], pixmap.shape[1]
+    i0 = int(min(max(np.trunc(xin), 0.0), nx - 2.0))
+    j0 = int(min(max(np.trunc(yin), 0.0), ny - 2.0))
+    x = xin - i0
+    y = yin - j0
+    x1 = 1.0 - x
+    y1 = 1.0 - y
+    for q in range(2):
+        out[j, i, k, q] = (
+            pixmap[j0, i0, q] * x1 * y1 + pixmap[j0, i0 + 1, q] * x * y1
+            + pixmap[j0 + 1, i0, q] * x1 * y + pixmap[j0 + 1, i0 + 1, q] * x * y
+        )
+
+
+@numba.njit(cache=True, error_model="numpy")
+def _interpolate_four_points(pixmap, j, i, h, out):
+    """Corners of interior input pixel ``(j, i)``, as drizzle's ``interpolate_four_points``.
+
+    Each corner is the sum of four of the nine pixel map values around the
+    pixel, each premultiplied by its bilinear weight.
+
+    Parameters
+    ----------
+    pixmap : ndarray, shape (ny, nx, 2)
+    j, i : int
+        Input pixel, with ``1 <= j <= ny - 3`` and ``1 <= i <= nx - 3``.
+    h : float
+        Half of ``pixfrac``.
+    out : ndarray, shape (ny, nx, 4, 2)
+        The corners are written to ``out[j, i]``.
+    """
+    centre = (1.0 - h) * (1.0 - h)
+    side = (1.0 - h) * h
+    diagonal = h * h
+    for q in range(2):
+        # p<a><b>: pixel map at x offset a - 1 and y offset b - 1 from the pixel
+        p00 = pixmap[j - 1, i - 1, q]
+        p10 = pixmap[j - 1, i, q]
+        p20 = pixmap[j - 1, i + 1, q]
+        p01 = pixmap[j, i - 1, q]
+        p11 = pixmap[j, i, q]
+        p21 = pixmap[j, i + 1, q]
+        p02 = pixmap[j + 1, i - 1, q]
+        p12 = pixmap[j + 1, i, q]
+        p22 = pixmap[j + 1, i + 1, q]
+        out[j, i, 0, q] = p01 * side + p11 * centre + p02 * diagonal + p12 * side
+        out[j, i, 1, q] = p11 * centre + p21 * side + p12 * side + p22 * diagonal
+        out[j, i, 2, q] = p10 * side + p20 * diagonal + p11 * centre + p21 * side
+        out[j, i, 3, q] = p00 * diagonal + p10 * side + p01 * side + p11 * centre
+
+
+@numba.njit(parallel=True, cache=True, error_model="numpy")
+def _jacobian(corners):
+    """Half the cross product of the diagonals of each quadrilateral; see `jacobian`.
+
+    Parameters
+    ----------
+    corners : ndarray, shape (ny, nx, 4, 2)
+
+    Returns
+    -------
+    ndarray, shape (ny, nx)
+    """
+    ny, nx = corners.shape[0], corners.shape[1]
+    out = np.empty((ny, nx))
+    for j in numba.prange(ny):
+        for i in range(nx):
+            x0, y0 = corners[j, i, 0, 0], corners[j, i, 0, 1]
+            x1, y1 = corners[j, i, 1, 0], corners[j, i, 1, 1]
+            x2, y2 = corners[j, i, 2, 0], corners[j, i, 2, 1]
+            x3, y3 = corners[j, i, 3, 0], corners[j, i, 3, 1]
+            out[j, i] = 0.5 * ((x1 - x3) * (y0 - y2) - (x0 - x2) * (y1 - y3))
+    return out
 
 
 @numba.njit(cache=True, error_model="numpy")

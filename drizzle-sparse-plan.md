@@ -1,6 +1,8 @@
 # Plan: faster, float64, parallel drizzle via an explicit sparse operator
 
-**Status:** draft handoff, not yet started
+**Status:** milestone steps 1-2 done (`fc5db6d`); step 3 done: baseline in
+§8.1, after the speed-up of the operator build and apply in §8.2; step 4
+(A vs B, the B.1 PR) open
 **Context date:** 2026-11-01
 **Reference code:** `spacetelescope/drizzle` `main` @ `59ff6a1` (2026-10-28)
 
@@ -174,11 +176,125 @@ Start with A; carry (B.1) as an independent PR regardless.
   and outlier-detection round trips, not the kernel. Measure those
   separately so the comparison is honest.
 
+### 8.1 Baseline, 2026-11-01 (spizzle `fc5db6d`)
+
+`python benchmarks/bench_spizzle.py --rss`: 2048² input with a rotated,
+slightly distorted pixel map, 2× oversampling, `pixfrac=0.8`, output
+5085² enclosing the input. `W` has 3.16e7 non-zeros (7.53 per input pixel),
+0.66 GiB. Minimum of 5 runs after one untimed run; output arrays written
+beforehand in both packages. Apple M3 Pro (5 performance + 6 efficiency
+cores, 18 GB), Python 3.14, numba 0.68.1, scipy 1.18.1, drizzle `f37a056`
+(jdavies-st float64 branch, which takes float32 or float64 outputs).
+
+Planes are the science data plus variance planes. "One call" passes the
+variance planes to `tdriz` as `input2`, as jwst does; "one call per plane"
+is k × the 1-plane time, for planes drizzled in separate passes.
+
+| planes | drizzle f32, one call | drizzle f64, one call | drizzle f32, one call per plane | spizzle, `drizzle_operator` + `Coadd.add` | drizzle f32 one call / spizzle |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.567 s | 0.600 s | 0.567 s | 1.142 s | 0.50 |
+| 4 | 0.720 s | 0.765 s | 2.267 s | 1.501 s | 0.48 |
+| 8 | 1.239 s | 0.950 s | 4.533 s | 1.789 s | 0.69 |
+| 16 | 2.439 s | 2.321 s | 9.067 s | 3.866 s | 0.63 |
+
+spizzle steps:
+
+| step | time |
+| --- | ---: |
+| `drizzle_operator`, numba threads 1 / 4 / 8 / 11 | 1.48 / 0.99 / 0.96 / 0.93 s |
+| `corners` (numpy) | 0.288 s |
+| `jacobian` (numpy) | 0.038 s |
+| `overlap_triplets` (numba, 11 threads) | 0.154 s |
+| `build_operator` (scipy COO to CSR) | 0.454 s |
+| `Coadd.add`, 1 / 4 / 8 / 16 planes | 0.21 / 0.57 / 0.85 / 2.93 s |
+
+Peak resident memory for one exposure with 3 variance planes, in a fresh
+process: drizzle 1.25 GiB (f32) and 1.66 GiB (f64), spizzle 3.56 GiB.
+
+Findings:
+
+- Goal 3 is not met yet. drizzle already shares the geometry between the
+  science and variance planes of one call (~0.05-0.1 s per extra plane),
+  so spizzle is ~2× slower for the jwst pattern and faster only than
+  separate drizzle passes over the same geometry.
+- Only `overlap_triplets` is threaded (~0.70 s on 1 thread, 0.15 s on 11);
+  the single-threaded numpy/scipy steps around it take 0.78 s of the
+  0.93 s. The COO-to-CSR conversion is not needed: the triplets come out
+  in input pixel order, so a CSC array can be built from them without
+  sorting.
+- `Coadd.add` makes a new array for every product and forms `W∘W`, so
+  each plane costs ~0.1 s and the memory peak is ~3× drizzle's.
+- gwcs evaluation is not included (synthetic pixel map); measure it with
+  the real-data test (§7.4).
+
+### 8.2 After the speed-up, 2026-11-01
+
+Same benchmark, machine and versions as §8.1. Changes:
+
+- `corners` and `jacobian` are numba kernels, parallel over input rows,
+  with the same arithmetic as before; the results are bit-identical.
+- `build_operator` builds the CSR arrays itself, in parallel: the
+  non-zero triplets are counted and bucketed by output row, a chunk of
+  triplets per thread, then sorted by column within each row. Both sorts
+  keep the triplet order, so the entries of each output pixel stay in
+  input pixel order, and the arrays equal scipy's COO-to-CSR result bit
+  for bit.
+- `Coadd.add` makes one parallel pass over the rows of `W` for the
+  science data, weights and context, and one per variance plane, adding
+  into its accumulators without temporary arrays or `W∘W`.
+- CSR was kept, although CSC needs no sort: the parallel CSR build costs
+  0.10 s, and a parallel apply needs CSR rows (gathers); applying a CSC
+  array scatters, which does not parallelise without write conflicts.
+  Serial CSC apply measured 0.32 s for 4 planes against 0.06 s for the
+  parallel CSR one.
+
+| planes | drizzle f32, one call | drizzle f64, one call | drizzle f32, one call per plane | spizzle, `drizzle_operator` + `Coadd.add` | drizzle f32 one call / spizzle |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.563 s | 0.600 s | 0.563 s | 0.274 s | 2.06 |
+| 4 | 0.722 s | 0.762 s | 2.251 s | 0.318 s | 2.27 |
+| 8 | 1.277 s | 0.961 s | 4.502 s | 0.379 s | 3.37 |
+| 16 | 2.423 s | 2.295 s | 9.005 s | 0.519 s | 4.67 |
+
+| step | time | baseline |
+| --- | ---: | ---: |
+| `drizzle_operator`, numba threads 1 / 4 / 8 / 11 | 1.09 / 0.36 / 0.27 / 0.26 s | 1.48 / 0.99 / 0.96 / 0.93 s |
+| `corners` | 0.010 s | 0.288 s |
+| `jacobian` | 0.003 s | 0.038 s |
+| `overlap_triplets` | 0.143 s | 0.154 s |
+| `build_operator` | 0.095 s | 0.454 s |
+| `Coadd.add`, 1 / 4 / 8 / 16 planes | 0.018 / 0.063 / 0.123 / 0.263 s | 0.21 / 0.57 / 0.85 / 2.93 s |
+
+Peak resident memory with 3 variance planes: spizzle 2.96 GiB (baseline
+3.56), drizzle 1.25 GiB (f32) and 1.66 GiB (f64).
+
+Findings:
+
+- Goal 3 is met on this machine: 2.3× faster than drizzle for the
+  science data and 3 variance planes in one call, 4.7× for 16 planes. A
+  further pass over the same geometry costs ~0.02 s against 0.56 s for a
+  drizzle call.
+- On one thread spizzle is still slower than drizzle (1.09 s for the
+  operator alone against 0.56 s for a whole drizzle call); the speed-up
+  comes from the threads. Scaling flattens past 4 threads: the M3 Pro
+  has 5 performance cores. A server node would show the scaling better.
+- `overlap_triplets` is now 55% of the operator time, and nearly all of
+  it is drizzle's `boxer`/`sgarea` (count 0.008 s, fill 0.09-0.11 s,
+  compaction 0.027 s). Counting the non-zero overlaps exactly would add a
+  second `boxer` pass to save the compaction. A faster clipping
+  algorithm would give up bit-for-bit agreement with drizzle.
+- Memory is ~2.4× drizzle's. During `build_operator` the triplets (24 B
+  per entry), the row buckets (24 B per entry) and the CSR arrays (16 B
+  per entry plus 8 B per output pixel) are alive together.
+
 ## 9. Open questions / risks
 
 - Memory for `W` on large mosaics: must stream per exposure; consider
   float32 *values* in CSR (geometry precision is not the bottleneck) while
   keeping accumulators float64.
+- The CSR `indptr` has one int64 per output pixel, so on a large mosaic
+  each exposure's `W` costs 8 bytes per output pixel even where the
+  exposure does not land. Restricting `W` to the exposure's bounding box
+  on the output grid would avoid that.
 - `numba` `parallel=True` with dynamic per-row buffers: may need a two-pass
   (count, then fill) scheme for predictable allocation.
 - Rounding helper `nintd` and bounding-box clipping must match the C exactly
