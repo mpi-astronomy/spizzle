@@ -1,0 +1,14 @@
+---
+cff-version: 1.2.0
+message: If you use this software, please cite as below.
+title: spizzle
+abstract: Drizzle as an explicit sparse linear operator, in float64
+authors:
+- family-names: Davies
+  given-names: James E.
+  email: jdavies@mpia.de
+  orcid: https://orcid.org/0000-0002-5079-9098
+  affiliation: Max Planck Institute for Astronomy
+type: software
+license: BSD-3-Clause
+url: https://github.com/mpi-astronomy/spizzle

@@ -1,0 +1,84 @@
+[project]
+name = "spizzle"
+authors = [
+    {name = "James Davies", email = "jdavies@mpia.de"},
+]
+description = "Drizzle as an explicit sparse linear operator, in float64"
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = [
+    "LICENSE",
+    "licenses/DRIZZLE_LICENSE.rst",  # spizzle.geometry is ported from drizzle
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+requires-python = ">=3.11"
+dependencies = [
+    "numba",
+    "numpy",
+    "scipy",
+]
+dynamic = ['version']
+
+[project.optional-dependencies]
+docs = [
+    "sphinx",
+    "sphinx-automodapi",
+    "numpydoc",
+]
+test = [
+    # the drizzle comparison tests need float64 output arrays in drizzle, not yet released;
+    # CI installs jdavies-st/drizzle@float64-phase2-c-accepts-float64 over this
+    "drizzle",
+    "pytest",
+    "flake8",
+    "flake8-pyproject",
+    "pytest-cov",
+]
+cff = [
+    "cff-from-621",
+]
+
+[project.urls]
+Homepage = "https://github.com/mpi-astronomy/spizzle"
+
+[build-system]
+requires = [
+    "setuptools>=77",
+    "setuptools_scm>=8",
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+write_to = "src/spizzle/_version.py"
+
+[tool.cff-from-621]
+# no version or date-released: the tag and PyPI carry the version
+order = ["cff-version", "message", "title", "abstract", "authors", "urls", "type", "keywords"]
+
+[tool.cff-from-621.static]
+message = "If you use this software, please cite as below."
+license = "BSD-3-Clause"
+authors = [
+    {"family-names" = "Davies", "given-names" = "James E.", "email" = "jdavies@mpia.de", "orcid" = "https://orcid.org/0000-0002-5079-9098", "affiliation" = "Max Planck Institute for Astronomy"},
+]
+
+[tool.setuptools.dynamic]
+# cff-from-621 needs this to resolve the dynamic version; setuptools_scm still sets it, with a warning
+version = {attr = "spizzle._version.version"}
+
+[tool.flake8]
+max-line-length = 130
+exclude = [
+    'docs',
+    '.tox',
+    '.eggs',
+    'build',
+    '*_version.py',
+]
