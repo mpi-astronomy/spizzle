@@ -2,7 +2,8 @@
 
 **Status:** first milestone done: steps 1-2 in `fc5db6d`, step 3 (benchmarks)
 in §8.1 and §8.2, step 4 (A vs B) decided in §6. Real-data check (§7.4)
-done, results in §7.1
+done, results in §7.1. Next steps (§11): 1-3 done, 4 (exact aperture
+variance) planned for later.
 **Context date:** 2026-11-01
 **Reference code:** `spacetelescope/drizzle` `main` @ `59ff6a1` (2026-10-28)
 
@@ -593,9 +594,105 @@ Findings:
    0.5-2.3 GiB for the covariance. 2× oversampling, r=3, 4× the pixels:
    3.4-17 GiB.
 
+   Products at the ResampleStep level (user, 2026-11-01): the
+   pixel-to-pixel variance planes as now, plus the noise factor as a
+   separate plane, so that photutils can use them together for aperture
+   photometry; the correlation images optionally in a separate file.
+
+   How good is the noise factor for apertures? photutils sums `error**2`
+   over the aperture, so `error = sqrt(var * noise_factor)` also counts
+   each pixel's covariance with its neighbors just outside the aperture.
+   Against the exact variance of the aperture sum, `sum(m var) + 2
+   sum_k sum_o m(o) m(o + d_k) cov_k(o)` for a mask m of pixel centers
+   inside the circle, on the native NIRCam mosaic above (1500 random
+   apertures per radius, in variance):
+
+   | aperture radius | var × noise factor / exact: median (5-95%) | var / exact: median |
+   | ---: | ---: | ---: |
+   | 1.5 px | 1.27 (1.23-1.35) | 0.56 |
+   | 2 px | 1.28 (1.23-1.39) | 0.57 |
+   | 3 px | 1.17 (1.10-1.28) | 0.52 |
+   | 5 px | 1.09 (1.04-1.17) | 0.48 |
+   | 10 px | 1.04 (1.01-1.10) | 0.46 |
+   | 20 px | 1.02 (1.01-1.05) | 0.45 |
+
+   The variance alone, as in ERR now, underestimates aperture errors by
+   25-33%; with the noise factor they are 13% too large at 1.5-2 px,
+   4.5% at 5 px, 1% at 20 px. The excess is the covariance across the
+   aperture edge, which depends on the aperture, so no per-pixel plane
+   removes it; the exact value needs the correlation images.
+
+   The exact correction also varies across the mosaic (distortion, the
+   local dither overlap, weights), so one factor per aperture size does
+   not fit the whole field. Exact aperture variance over `sum(m var)`, on
+   the same apertures:
+
+   | aperture radius | median | 5-95% | min-max | error from the median factor, 5-95% |
+   | ---: | ---: | ---: | ---: | ---: |
+   | 1.5 px | 1.78 | 1.66-1.89 | 1.43-2.22 | -2.7% to +3.7% |
+   | 2 px | 1.77 | 1.64-1.86 | 1.12-2.51 | -2.4% to +4.1% |
+   | 3 px | 1.94 | 1.79-2.08 | 1.45-2.53 | -3.5% to +3.9% |
+   | 5 px | 2.07 | 1.92-2.21 | 1.36-2.54 | -3.1% to +3.9% |
+   | 10 px | 2.18 | 2.05-2.27 | 1.38-2.58 | -2.2% to +3.1% |
+   | 20 px | 2.22 | 2.09-2.30 | 1.37-2.50 | -1.7% to +3.2% |
+
    Open:
+   - exact aperture variance at each aperture's position: step 4;
    - 2× oversampled mosaics at the large end: tile the output out of core
      (each exposure's operator to disk, a tile's rows plus a margin of r);
    - covariance for a region only, and the exact variance of apertures or
      other weighted sums through `W.T` in a second pass, if needed.
+
+4. **Exact aperture variance** (to do later; agreed 2026-11-01). Step 3
+   shows two things. The noise factor overstates aperture errors by 1-13%,
+   depending on the aperture size. The exact correction also varies
+   across the field: one factor per aperture size is off by -3.5% to
+   +4.1% (5-95%), and by -16% to +27% at the extremes. So each aperture's
+   variance has to be computed where the aperture is, from the local
+   covariance.
+
+   Proposed function, with no photutils dependency:
+   `aperture_variance(variance, correlation, mask, position)`.
+   - `variance`: the mosaic's total variance, i.e. the sum of its
+     variance planes. This is the variance that `Covariance.add` was
+     given, summed over the exposures.
+   - `correlation`: the file from `write_correlation`, read through
+     astropy's memory mapping, or a `Covariance`.
+   - `mask`: the aperture's weights on a cutout, such as photutils'
+     `ApertureMask.data` (center, exact or subpixel mode).
+   - `position`: `(y0, x0)`, the cutout's first pixel in the mosaic
+     (photutils' `mask.bbox.iymin`, `mask.bbox.ixmin`).
+   - It returns the variance of `sum(mask * img[cutout])`:
+     `sum(m**2 var) + 2 sum_k sum_o m(o) m(o + d_k) c_k(o) s(o) s(o + d_k)`,
+     with `s = sqrt(var)` and `c_k` the correlation at offset k.
+
+   Notes for the implementation:
+   - Both pixels of each pair lie in the cutout, and `c_k` is stored at
+     the first pixel of the pair. So only the cutout of the variance and
+     of each correlation plane is read, with no margin.
+   - Many apertures: a variant that takes lists of masks and positions
+     (photutils' `to_mask()` gives a list). It sorts the apertures by row,
+     so that it reads a memory-mapped file in a single pass.
+   - Edges and gaps: cutouts partly off the grid are clipped to it. Pixels
+     without weight are NaN in the variance and the correlation, and the
+     result is NaN when the mask touches one, as in photutils without a
+     `mask`. The caller decides what to exclude.
+   - Consistency: the variance and the correlation file must come from
+     the same exposures and weights. To decide: should `write_correlation`
+     also write the total variance, so that the file is self-contained
+     and a mismatch cannot happen?
+   - Tests: against the dense `m.T C m` of a small rotated case, with
+     - a binary mask,
+     - a fractional mask,
+     - a cutout partly off the grid,
+     - the file and a `Covariance` as input, which give the same result.
+   - Checks: a Monte Carlo of aperture sums through `Coadd`, added to
+     `benchmarks/check_covariance.py`. The tables in step 3 came from a
+     scratch script (1500 random apertures per radius on the native
+     NIRCam mosaic, all in memory). That measurement also moves into
+     `check_covariance.py`, so that it can be rerun.
+   - Later: photutils' `aperture_photometry` takes only an `error` array,
+     which cannot carry covariance. Whether photutils should accept the
+     correlation images is a question for its maintainers, once the
+     ResampleStep products are settled.
 
