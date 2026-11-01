@@ -22,7 +22,9 @@ from drizzle by how much, in decades of the difference relative to
 science values close to zero do not dominate.  It also compares the NaN
 pixels and the context image, checks that the flux is conserved, and
 times the pixel maps (gwcs), the spizzle operator and co-addition and the
-drizzle calls.  The packages run ``--repeat`` times over all exposures, in
+drizzle calls.  It also times spizzle's ``pixel_map``, which interpolates
+the WCS evaluated on a coarse grid, and prints its largest difference from
+``calc_pixmap``.  The packages run ``--repeat`` times over all exposures, in
 alternating order and with only one package's outputs in memory at a
 time, and the timings are the minimum for each exposure; the outputs
 compared come from one more, untimed, pass of each.  The pixel maps are
@@ -43,7 +45,7 @@ from astropy.wcs import WCS
 from drizzle import cdrizzle
 from drizzle.utils import calc_pixmap
 
-from spizzle import Coadd, drizzle_operator
+from spizzle import Coadd, drizzle_operator, pixel_map
 
 DO_NOT_USE = 1
 NON_SCIENCE = 512
@@ -221,6 +223,15 @@ def main():
         pixmaps.append(calc_pixmap(exposure.wcs, wcs_out, shape=exposure.data.shape))
         pixmap_times.append(time.perf_counter() - t0)
 
+    spline_times = []
+    spline_error = 0.0
+    for exposure, pixmap in zip(exposures, pixmaps):
+        t0 = time.perf_counter()
+        interpolated = pixel_map(exposure.wcs, wcs_out, shape=exposure.data.shape)
+        spline_times.append(time.perf_counter() - t0)
+        spline_error = max(spline_error, float(np.nanmax(np.abs(interpolated - pixmap))))
+    print(f"spizzle pixel_map differs from calc_pixmap by at most {spline_error:.1e} pixel")
+
     # compile and load the numba kernels before timing
     y, x = np.indices((4, 4), dtype=np.float64)
     Coadd((4, 4), n_var=1).add(drizzle_operator(np.dstack([x, y]), (4, 4)), np.ones((4, 4)), [np.ones((4, 4))])
@@ -232,7 +243,10 @@ def main():
     }
     # timed passes keep only one package's outputs in memory, so that a large
     # output frame does not run the machine short of memory while timing
-    times = {"pixel map (gwcs, calc_pixmap)": np.array(pixmap_times)}
+    times = {
+        "pixel map (gwcs, calc_pixmap)": np.array(pixmap_times),
+        "pixel map (spizzle pixel_map, bicubic every 16 pixels)": np.array(spline_times),
+    }
     order = list(runs)
     for _ in range(args.repeat):
         for name in order:

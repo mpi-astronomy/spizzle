@@ -21,6 +21,8 @@ image is those sums divided by the output weights.
    without recomputing it
  - `Coadd`: the weighted mean of exposures on one output grid, with
    variance planes and drizzle's context image
+ - `pixel_map`: the pixel map of an exposure from its WCS and the output
+   WCS, by default interpolated from the WCS on a coarse grid
 
 
 # How it compares with drizzle
@@ -65,8 +67,10 @@ single thread spizzle is slower than drizzle.  The peak memory is higher:
 packages and compares the results.  For eight NIRCam long-wavelength
 exposures on a common mosaic frame the two agree to better than 2e-12
 (most pixels better than 1e-15) against drizzle computing in float64, and
-spizzle takes 0.26 s per exposure against drizzle's 0.42 s; computing the
-pixel map with gwcs takes 0.73 s.
+spizzle takes 0.26 s per exposure against drizzle's 0.42 s.  Evaluating
+the WCS for every pixel with `drizzle.utils.calc_pixmap` takes 0.84 s;
+spizzle's `pixel_map` takes 0.075 s and differs from it by at most 2e-8
+pixel.
 
 
 # Installation
@@ -77,10 +81,11 @@ pixel map with gwcs takes 0.73 s.
 # Usage
 
 ```python
-from spizzle import Coadd, drizzle_operator
+from spizzle import Coadd, drizzle_operator, pixel_map
 
 coadd = Coadd(out_shape, n_var=1)
-for data, var, weights, pixmap in exposures:
+for data, var, weights, wcs in exposures:
+    pixmap = pixel_map(wcs, wcs_out, shape=data.shape)
     op = drizzle_operator(pixmap, out_shape, pixfrac=0.8, weights=weights)
     coadd.add(op, data, variances=[var])
 
@@ -91,18 +96,14 @@ context = coadd.out_ctx
 ```
 
 The pixel map holds the output `x` and `y` of every input pixel center,
-shape `(ny, nx, 2)`, NaN where an input pixel has no mapping.  From two
-WCS objects with the common astropy interface (gwcs or `astropy.wcs`):
-
-```python
-import numpy as np
-
-y, x = np.indices(data.shape)
-xo, yo = wcs_out.world_to_pixel(wcs_in.pixel_to_world(x, y))
-pixmap = np.dstack([xo, yo])
-```
-
-or `drizzle.utils.calc_pixmap(wcs_in, wcs_out)`.
+shape `(ny, nx, 2)`, NaN where an input pixel has no mapping.
+`pixel_map` makes it from two WCS objects with the shared astropy
+interface (gwcs or `astropy.wcs`) that use the same celestial frame, as
+drizzle's `calc_pixmap` does.  Evaluating a WCS for every pixel is slow,
+so by default `pixel_map` evaluates it on every 16th pixel and
+interpolates with bicubic splines, which assumes a smooth distortion;
+`stepsize=1` evaluates every pixel, on several threads.  Any pixel map
+works, such as one from `drizzle.utils.calc_pixmap(wcs_in, wcs_out)`.
 
 An exposure usually covers a small part of the output grid, which can be
 a large mosaic, so `drizzle_operator` keeps `W` to the exposure's

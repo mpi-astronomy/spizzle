@@ -19,6 +19,12 @@ First release.
   `Coadd.add` run in parallel on numba's threads; the results do not
   depend on the number of threads.  `overlap_triplets` computes the
   overlap areas with drizzle's `boxer` and `sgarea`, ported to numba.
+- `pixel_map`: the pixel map of an exposure from its WCS and the output
+  WCS, as drizzle's `calc_pixmap` makes it.  By default the WCS are
+  evaluated on every 16th pixel and interpolated with bicubic splines,
+  which for NIRCam is 11 times faster and differs from the full
+  evaluation by at most 2e-8 pixel; `stepsize=1` evaluates every pixel,
+  on several threads.
 - `Coadd`: the weighted mean of exposures on one output grid, with any
   number of variance planes and drizzle's context image, summed in
   float64 and divided once at the end.

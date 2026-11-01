@@ -440,6 +440,52 @@ Findings:
    - compile the transform (numba) for the model types NIRCam imaging
      uses; fast, but tied to one transform structure.
 
-   Whatever helps belongs upstream (drizzle's `calc_pixmap`, gwcs or
-   astropy.modeling) rather than in spizzle, which takes the pixel map
-   as input.
+   Prototype, 2026-11-01 (`nrcalong` 2048², against `calc_pixmap`; output
+   frame the pipeline's gwcs `i2d` frame, or the astropy TAN mosaic frame
+   of §7.1):
+
+   | method | gwcs `i2d` frame | astropy TAN frame | against `calc_pixmap` |
+   | --- | ---: | ---: | --- |
+   | `drizzle.utils.calc_pixmap` | 0.84 s | 0.80 s | |
+   | row blocks of 64 on 8-11 threads | 0.45 s | 0.28 s | bit-identical |
+   | input bounding box switched off | no clear gain | no clear gain | bit-identical |
+   | every 16th pixel, bicubic spline | 0.08 s | 0.08 s | max 2.1e-8 px |
+   | every 32nd pixel, bicubic spline | 0.08 s | 0.07 s | max 3.4e-7 px |
+   | every 16th pixel, bilinear | | | max 8.4e-4 px |
+   | every 32nd pixel, bilinear | | | max 3.3e-3 px |
+
+   - Threads help less than the cores suggest: gwcs and astropy.modeling
+     run many small numpy calls, and the GIL is held between them.
+   - The spline is ~10× faster, and bicubic is ~1e4× more accurate than
+     bilinear for the same step; nearly all of its time (0.065 s) is the
+     spline fit and evaluation on the full grid, not the WCS.
+   - This already exists upstream: `stcal.resample.utils.calc_pixmap` has
+     `stepsize` and `order` (1 or 3), which jwst's resample and outlier
+     detection pass as `pixmap_stepsize` and `pixmap_order`, defaults 1.0
+     (no interpolation) and 1 (bilinear). drizzle's own `calc_pixmap` has
+     no interpolation; drizzle PR #249 (open) adds `frame_check`, which
+     converts between celestial frames through the APE 14 high-level API.
+   - Building pixel-map creation into spizzle, on drizzle's function, is
+     fine (user, 2026-11-01).
+
+   Done, 2026-11-01: `spizzle.pixel_map(wcs_from, wcs_to, shape=None,
+   stepsize=16, order=3, disable_bbox="to", threads=None)`. Bounding boxes
+   and shape as in drizzle's `calc_pixmap`; by default the WCS on a grid
+   at most 16 pixels apart, bicubic splines between; the full evaluation,
+   in row blocks of 64 on numba's thread count, for `stepsize=1` or when
+   the grid has a non-finite value. No runtime dependency on drizzle. On
+   the 8 `nrcalong` exposures of §7.1: 0.075 s per exposure against 0.84 s
+   for `calc_pixmap`, at most 2.2e-8 pixel apart. An exposure through
+   spizzle now takes ~0.34 s (pixel map, operator, `Coadd.add`) against
+   ~1.27 s for `calc_pixmap` and drizzle.
+
+   Still open:
+   - frame conversion: adopt drizzle PR #249's `frame_check` once it is
+     merged; until then both WCS must share the celestial frame, as for
+     drizzle's current `calc_pixmap`;
+   - the spline evaluation (0.065 s, scipy holds the GIL) is now most of
+     `pixel_map`; the tensor-product B-spline could be evaluated as two
+     matrix products, which BLAS runs on several threads;
+   - corners evaluated from the spline instead of bilinear interpolation
+     of the pixel map would be more accurate, but no longer
+     bit-identical to drizzle (see §5.1).

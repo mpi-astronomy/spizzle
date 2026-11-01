@@ -2,6 +2,7 @@ from importlib.metadata import version, PackageNotFoundError
 
 from .geometry import corners, jacobian, overlap_triplets
 from .operator import build_operator, drizzle_operator, Operator, Coadd
+from .pixmap import pixel_map
 
 
 try:
@@ -19,4 +20,5 @@ __all__ = [
     'drizzle_operator',
     'Operator',
     'Coadd',
+    'pixel_map',
 ]

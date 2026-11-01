@@ -14,10 +14,11 @@ Usage
 
 .. code-block:: python
 
-    from spizzle import Coadd, drizzle_operator
+    from spizzle import Coadd, drizzle_operator, pixel_map
 
     coadd = Coadd(out_shape, n_var=1)
-    for data, var, weights, pixmap in exposures:
+    for data, var, weights, wcs in exposures:
+        pixmap = pixel_map(wcs, wcs_out, shape=data.shape)
         op = drizzle_operator(pixmap, out_shape, pixfrac=0.8, weights=weights)
         coadd.add(op, data, variances=[var])
 
@@ -31,6 +32,9 @@ rather than with the output grid.
 
 The pixel map holds the output ``x`` and ``y`` of every input pixel
 center, shape ``(ny, nx, 2)``, NaN where an input pixel has no mapping.
+`pixel_map` makes it from two WCS with the shared astropy interface, by
+default from the WCS on every 16th pixel, interpolated with bicubic
+splines.
 
 Reference
 ---------
