@@ -67,7 +67,7 @@ scale.  To compare an exposure with a mosaic, as outlier detection does,
 `blot(median, pixmap)` interpolates the mosaic back onto the exposure's
 pixels, with the exposure's pixel map onto the mosaic.
 
-The [documentation](docs/index.rst) describes the pixel maps, the
+The [documentation](https://mpi-astronomy.github.io/spizzle/) describes the pixel maps, the
 operator, the covariance and blot in more detail, and how the results
 compare with drizzle and with the JWST pipeline.
 
