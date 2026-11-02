@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- `benchmarks/speed_table.py`: the speed table of the README, drizzle
+  and spizzle step by step on one JWST exposure.
+
+### Changed
+
+- The README is shorter: what is in the package, how to install it, how
+  to start, and a table of its speed.  The details moved to the
+  documentation page.
+
 ## [0.1.0] - 2026-11-02
 
 First release: drizzle's square kernel as an explicit sparse operator,
