@@ -41,6 +41,10 @@ test = [
 cff = [
     "cff-from-621",
 ]
+jwst = [
+    # benchmarks/compare_stcal.py runs jwst's own ResampleImage against spizzle
+    "jwst>=2.0.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/mpi-astronomy/spizzle"

@@ -868,7 +868,19 @@ Findings:
    - the tag, e.g. `0.1.0`, pushed to mpi-astronomy/spizzle.
 
    Until then snowblind can depend on `spizzle @
-   git+https://github.com/mpi-astronomy/spizzle@<commit>`. Open: lower
+   git+https://github.com/mpi-astronomy/spizzle@<commit>`. jwst is an
+   optional extra, `jwst = ["jwst>=2.0.0"]`, for `compare_stcal.py` only
+   (user, 2026-11-02: nothing older than jwst 2.0); the core needs only
+   numba, numpy and scipy. stcal's variance arithmetic is the same from
+   1.18 (what jwst 2.0 requires) to 1.20, up to the order of the final
+   division.
+
+   CI, 2026-11-02: an empty `region` made `overlap_triplets` read past an
+   empty array. Its row offsets, `[0] + cumsum(sizes)[:-1]`, have length
+   1 even for zero rows, so `_compact` read `counts[0]`. That was harmless
+   on macOS and crashed on Linux. The offsets are now `cumsum(sizes) -
+   sizes`, one per row. numba's `NUMBA_BOUNDSCHECK` does not catch this
+   inside `prange` loops, so it cannot guard CI. Open: lower
    bounds for numba, numpy and scipy (none now; CI tests only the latest
    versions), and whether the sdist should leave out
    `drizzle-sparse-plan.md` and `drizzle-issues.md`.

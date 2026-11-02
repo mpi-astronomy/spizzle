@@ -131,14 +131,14 @@ def overlap_triplets(corners, out_shape, region=None):
 
     # each row writes its candidates into its own slice, sized by the bounding boxes
     sizes = _count_candidates(corners, j0, j1, i0, i1, ny_out, nx_out)
-    starts = np.concatenate([[0], np.cumsum(sizes)[:-1]]).astype(np.int64)
+    starts = np.cumsum(sizes) - sizes
     total = int(sizes.sum())
     in_idx = np.empty(total, dtype=np.int64)
     out_idx = np.empty(total, dtype=np.int64)
     area = np.empty(total, dtype=np.float64)
     counts = _fill_triplets(corners, j0, j1, i0, i1, ny_out, nx_out, starts, in_idx, out_idx, area)
 
-    new_starts = np.concatenate([[0], np.cumsum(counts)[:-1]]).astype(np.int64)
+    new_starts = np.cumsum(counts) - counts
     n = int(counts.sum())
     triplets = (np.empty(n, dtype=np.int64), np.empty(n, dtype=np.int64), np.empty(n, dtype=np.float64))
     _compact(starts, counts, new_starts, in_idx, out_idx, area, *triplets)

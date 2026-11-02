@@ -80,8 +80,9 @@ the WCS for every pixel with `drizzle.utils.calc_pixmap` takes 0.84 s;
 spizzle's `pixel_map` takes 0.022 s and differs from it by at most 2e-8
 pixel.
 
-`benchmarks/compare_stcal.py` runs jwst's own `ResampleImage` on JWST
-`cal` files and spizzle on the same exposures, with stcal's weights and
+`benchmarks/compare_stcal.py` (with the `jwst` extra, jwst 2.0 or later)
+runs jwst's own `ResampleImage` on JWST `cal` files and spizzle on the
+same exposures, with stcal's weights and
 input ranges and jwst's output frame.  The JWST pipeline does not
 propagate the variance through the drizzle weights (it resamples the
 square root of each variance plane and squares it), so for this

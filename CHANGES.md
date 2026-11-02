@@ -72,7 +72,8 @@ pipeline's variance for comparison.
 - `benchmarks/compare_jwst.py`: drizzles JWST `cal` or `crf` files with
   drizzle and spizzle, compares the outputs and times both.
 - `benchmarks/compare_stcal.py`: resamples JWST `cal` files with jwst's
-  `ResampleImage` and with spizzle, and compares every output plane.
+  `ResampleImage` and with spizzle, and compares every output plane; it
+  needs the `jwst` extra (`pip install spizzle[jwst]`.
 - `benchmarks/check_covariance.py`: checks `Covariance` against noise
   realizations and the noise correction of Casertano et al. (2000), and
   `NoiseFactor` against `Covariance` on JWST `cal` files.

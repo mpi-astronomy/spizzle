@@ -1,6 +1,7 @@
 """Resample JWST ``cal`` files with jwst's ResampleImage and with spizzle, and compare every output plane.
 
-Run from the repository root, with jwst and stcal installed::
+Run from the repository root, with the ``jwst`` extra installed
+(``pip install -e ".[jwst]"``, jwst 2.0 or later)::
 
     python benchmarks/compare_stcal.py DATA/jw*_nrcalong_cal.fits
 

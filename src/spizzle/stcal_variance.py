@@ -20,7 +20,7 @@ __all__ = [
 
 
 class StcalVariance:
-    """Variance planes and error of a mosaic as stcal 1.20 resamples them, for imaging.
+    """Variance planes and error of a mosaic as stcal resamples them, for imaging.
 
     For each exposure and variance plane q, the resampled error is
     ``e_q = iscale * (W @ sqrt(var_q)) / (W @ 1)``, drizzle's weighted mean
@@ -31,8 +31,10 @@ class StcalVariance:
         var_q = sum(e_q**2 * w**2) / sum(w)**2 / pixel_scale_ratio**2
 
     over the exposures where ``e_q`` is finite and ``w > 0``: stcal's
-    ``resample_variance_arrays`` and ``finalize_resample_variance``.  ERR is
-    ``sqrt`` of the sum of the planes.
+    ``resample_variance_arrays`` and ``finalize_resample_variance``, the same
+    since stcal 1.18 (jwst 2.0) up to the order of the final division, which
+    stcal 1.20 changed to avoid overflow.  ERR is ``sqrt`` of the sum of the
+    planes.
 
     Parameters
     ----------
