@@ -823,6 +823,56 @@ Findings:
      and benchmarks now pass `str(np.nan)` instead of "INDEF"
      (`drizzle-issues.md`, issue 12).
 
+   Item 3 done, 2026-11-02: `StcalVariance(out_shape, n_var=3, rnoise=0,
+   weight_type="ivm", pixel_scale_ratio=1.0)`, stcal's
+   `resample_variance_arrays` and `finalize_resample_variance` for imaging,
+   from the operators: per exposure and plane `e = (iscale * (W @
+   sqrt(var)) / (W @ 1))**2`, weights `1 / e_rnoise` or the exposure time,
+   `var = sum(e w**2) / sum(w)**2 / ratio**2`, and ERR as `sqrt` of the
+   summed planes. Tests compare it with stcal's arithmetic copied line for
+   line, with drizzle's `tdriz` for the resampled errors (1e-12).
+
+   `benchmarks/compare_stcal.py` runs jwst 3.0.0's `ResampleImage` (stcal
+   1.20, with the float64 drizzle branch) on the 8 `nrcalong` files, then
+   spizzle with stcal's weights (`build_driz_weight`), input ranges
+   (`resample_range` as `region`) and jwst's output frame (4897×2858):
+
+   | plane | median | 99.9% | max |
+   | --- | ---: | ---: | ---: |
+   | SCI | 3.1e-8 | 1.9e-7 | 9.1e-6 |
+   | WHT | 3.2e-8 | 1.8e-7 | 3.2e-7 |
+   | VAR_RNOISE | 6.4e-8 | 3.2e-7 | 5.1e-7 |
+   | VAR_FLAT | 6.8e-8 | 3.3e-7 | 1.0e-6 |
+   | VAR_POISSON | 6.7e-8 | 3.2e-7 | 7.6e-7 |
+   | ERR | 3.5e-8 | 1.7e-7 | 3.1e-7 |
+
+   These are relative differences over the 13.8 M pixels with weight,
+   with no pixel NaN in only one of the two; CON is equal. That is
+   float32 round-off, as stcal keeps its outputs in float32. jwst takes
+   20.8 s; spizzle takes 8.0 s with the pixel map of every pixel, and
+   2.7 s with the default splines (then WHT differs by up to 2.3e-4 at a
+   few edge pixels, the rest as above). spizzle's time does not include
+   reading the data.
+
+   Item 5, 2026-11-02: `python -m build` gives a pure-Python wheel with
+   the package and both license files. Its runtime dependencies are
+   numba, numpy and scipy; astropy is imported only by
+   `Covariance.write_correlation`. "spizzle" is free on PyPI and
+   TestPyPI. `publish.yml` already builds and publishes every tag pushed
+   to mpi-astronomy/spizzle, with trusted publishing. A first release
+   needs, from the user:
+   - a pending trusted publisher for "spizzle" on PyPI: repository
+     mpi-astronomy/spizzle, workflow `publish.yml`, environment `pypi`;
+   - the `## [Unreleased]` section of CHANGES.md renamed to the version,
+     e.g. `## [0.1.0] - <date>`, which `scripts/release_notes.py` needs;
+   - the tag, e.g. `0.1.0`, pushed to mpi-astronomy/spizzle.
+
+   Until then snowblind can depend on `spizzle @
+   git+https://github.com/mpi-astronomy/spizzle@<commit>`. Open: lower
+   bounds for numba, numpy and scipy (none now; CI tests only the latest
+   versions), and whether the sdist should leave out
+   `drizzle-sparse-plan.md` and `drizzle-issues.md`.
+
 6. **Components for outlier detection** (agreed 2026-11-02). The step
    itself will live in snowblind and call spizzle for the drizzle parts.
    The aim is a reference image that predicts each exposure well enough

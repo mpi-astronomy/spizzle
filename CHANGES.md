@@ -47,6 +47,13 @@ First release.
 - `drizzle_operator` and `overlap_triplets` take `region`, a pair of
   slices of the input pixels to drizzle, as drizzle's `xmin`, `xmax`,
   `ymin` and `ymax`; the geometry of the other pixels is not computed.
+- `StcalVariance`: the variance planes and ERR of a mosaic as stcal's
+  `Resample` computes them for imaging (the resampled square root of each
+  variance plane, squared, combined with read-noise or exposure-time
+  weights), from the same operators, to check spizzle against the
+  pipeline.
+- `benchmarks/compare_stcal.py`: resamples JWST `cal` files with jwst's
+  `ResampleImage` and with spizzle, and compares every output plane.
 - `Operator.reach`: the largest distance in y or x between two output
   pixels that share an input pixel, beyond which drizzled noise is
   uncorrelated.

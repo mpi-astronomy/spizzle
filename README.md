@@ -29,6 +29,8 @@ image is those sums divided by the output weights.
    exposures, with much less memory than `Covariance`
  - `blot`: a mosaic interpolated back onto an exposure's pixel grid, as
    drizzle's bilinear `blot_image`, for outlier detection
+ - `StcalVariance`: the variance planes and ERR as the JWST pipeline
+   (stcal) computes them, to check spizzle against the pipeline
 
 
 # How it compares with drizzle
@@ -77,6 +79,19 @@ spizzle takes 0.26 s per exposure against drizzle's 0.42 s.  Evaluating
 the WCS for every pixel with `drizzle.utils.calc_pixmap` takes 0.84 s;
 spizzle's `pixel_map` takes 0.022 s and differs from it by at most 2e-8
 pixel.
+
+`benchmarks/compare_stcal.py` runs jwst's own `ResampleImage` on JWST
+`cal` files and spizzle on the same exposures, with stcal's weights and
+input ranges and jwst's output frame.  The JWST pipeline does not
+propagate the variance through the drizzle weights (it resamples the
+square root of each variance plane and squares it), so for this
+comparison spizzle computes the variance planes and ERR as stcal does,
+with `StcalVariance`; `Coadd.out_var` is the exact variance.  For the same
+eight exposures every plane agrees with jwst's to float32 round-off: SCI,
+WHT, VAR_RNOISE, VAR_FLAT, VAR_POISSON and ERR to a median of 3-7e-8 and at
+most 1e-5 relative, and CON exactly.  jwst takes 19.6 s, spizzle 2.7 s
+with its spline pixel maps (8.0 s evaluating the WCS for every pixel, as
+jwst does).
 
 
 # Installation

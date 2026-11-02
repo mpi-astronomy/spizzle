@@ -5,6 +5,7 @@ from .operator import build_operator, drizzle_operator, Operator, Coadd
 from .covariance import Covariance, NoiseFactor
 from .pixmap import pixel_map
 from .interpolation import blot
+from .stcal_variance import StcalVariance
 
 
 try:
@@ -26,4 +27,5 @@ __all__ = [
     'NoiseFactor',
     'pixel_map',
     'blot',
+    'StcalVariance',
 ]
