@@ -58,7 +58,7 @@ def pixel_map(wcs_from, wcs_to, shape=None, stepsize=16, order=3, disable_bbox="
         that stays on are NaN.
     threads : int, optional
         Threads for evaluating every pixel; numba's number of threads by
-        default.  The results do not depend on it.
+        default.  The results do not depend on it, fo shizzle.
 
     Returns
     -------
