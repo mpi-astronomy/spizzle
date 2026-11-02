@@ -38,6 +38,9 @@ First release.
   drizzle's `blot_image` with bilinear interpolation, which stcal's
   `gwcs_blot` uses for outlier detection.  It matches drizzle bit for
   bit, NaN positions included, and runs in parallel on numba's threads.
+  It accepts positions over the image's extent, `[-0.5, n - 0.5)`, where
+  drizzle accepts `[0, n)`, and holds the edge values beyond the
+  outermost pixel centers.
 - `Operator.reach`: the largest distance in y or x between two output
   pixels that share an input pixel, beyond which drizzled noise is
   uncorrelated.

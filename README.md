@@ -178,7 +178,10 @@ Outlier detection compares each exposure with the median of the
 resampled exposures, interpolated back onto the exposure's pixels.
 `blot` does that interpolation, bilinear as drizzle's `blot_image` with
 `interp="linear"` (as stcal's `gwcs_blot` uses it), and matches it bit for
-bit.  Its pixel map is the exposure's pixel map onto the grid of the
+bit except within half a pixel of the image's edges.  There drizzle
+accepts positions in `[0, n)`, half a pixel off the image's extent
+`[-0.5, n - 0.5)`; `blot` accepts the extent, holding the edge values
+beyond the outermost pixel centers.  Its pixel map is the exposure's pixel map onto the grid of the
 median, the same one that resampled it:
 
 ```python

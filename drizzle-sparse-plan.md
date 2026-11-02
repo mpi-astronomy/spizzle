@@ -781,6 +781,19 @@ Findings:
    float32 rounding step). The pixel map is nearly all of the cost, so a
    faster interpolation would gain little more.
 
+   Then, 2026-11-02 (user): `blot` accepts the image's extent, `[-0.5,
+   n - 0.5)`, instead of drizzle's `[0, n)`, which is half a pixel off
+   (`drizzle-issues.md`, issue 7). Beyond the outermost pixel centers it
+   holds the edge values, as drizzle already does in its last row and
+   column. It still matches drizzle bit for bit wherever both accept the
+   position. On the NIRCam exposure above, no blotted pixel changes.
+   Checking the other interpolation methods of `tblot` with known answers
+   found more problems, logged as issues 8-11: Lanczos weights that do
+   not sum to one and come from a truncated table (errors up to 1%),
+   Lanczos near the edges, a crash for `poly3` and `poly5` on images of
+   2-3 pixels, and ignored `xmin`/`xmax`/`ymin`/`ymax`. stcal uses only
+   the bilinear method.
+
    Then in snowblind: the `ResampleImage` subclass and the `gwcs_blot`
    replacement, and a check against the stock steps on the 8 NIRCam
    exposures, in an environment with jwst and stcal.

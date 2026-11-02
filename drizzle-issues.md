@@ -105,3 +105,97 @@ whole image.  Adding `-ffp-contract=off` (or `/fp:precise` on MSVC) to
 `imin >= imax` or `jmin >= jmax`, so a pixmap whose valid pixels form a
 single row or column gives "No or too few valid pixels in the pixel
 map", and `tdriz` also requires `xmax > xmin` and `ymax > ymin`.
+
+## 7. Blot's valid region is shifted by half a pixel
+
+**Severity:** minor (affects the outermost pixel of the blotted image).
+**spizzle:** decided 2026-11-02 to accept the image's extent,
+`[-0.5, nx - 0.5)`, holding the edge values beyond the outermost pixel
+centers; `blot` matches drizzle bit for bit everywhere else.
+
+Pixel centers are at integer coordinates, so an image of `nx` columns
+covers `[-0.5, nx - 0.5)`. `doblot` (`src/cdrizzleblot.c:674`) accepts
+positions in `[0, nx)` (and likewise in y). A position in the first half
+of the first pixel gets the fill value, while one up to half a pixel
+beyond the last edge gets the value of the last column:
+`interpolate_bilinear` (`:295`) interpolates there along y only.
+
+Reproduction:
+
+```python
+import numpy as np
+from drizzle import cdrizzle
+
+data = np.arange(12.0).reshape(3, 4)   # x edges at -0.5 and 3.5
+pixmap = np.array([[[-0.25, 1.0], [3.75, 1.0], [1.0, -0.25], [1.0, 2.75]]])
+out = np.zeros((1, 4))
+cdrizzle.tblot(data, pixmap, out, interp="linear", fillval=-99.0)
+print(out)   # [[-99. 7. -99. 9.]]: inside the image filled, outside it given values
+```
+
+The same check applies to every interpolation method, not only to the
+bilinear one.
+
+## 8. Lanczos blot weights do not sum to one, and come from a truncated table
+
+**Severity:** wrong results for `lanczos3` and `lanczos5` (up to 1%).
+
+`interpolate_lanczos` (`src/cdrizzleblot.c:528`) sums the pixels times
+the kernel weights without dividing by the sum of the weights. Lanczos
+weights do not add up to one: in 2D the sum ranges over 0.989-1.000 for
+`lanczos3` and 0.998-1.000 for `lanczos5`, depending on the position
+between pixel centers. The weights also come from a table with spacing
+0.003 (`lut_delta`, `:30`; `create_lanczos_lut`,
+`src/cdrizzleutil.c:448`), looked up by truncating `|x - i| / 0.003`
+rather than by rounding or interpolating. This moves the sums to
+0.991-1.008 (`lanczos3`) and 0.999-1.010 (`lanczos5`). At a pixel
+center, the neighbors at integer distances get the weight of 0.999,
+1.998, ... instead of zero.
+
+Measured with known answers (positions at least 4 pixels from the
+edges):
+
+- a flat image is reproduced only to 0.9% (`lanczos3`) and 1.0%
+  (`lanczos5`);
+- at pixel centers, the result differs from the pixel's value by up to
+  5.6e-3 (`lanczos3`) and 7.3e-3 (`lanczos5`) for unit-variance noise;
+- `nearest`, `linear`, `poly3` and `poly5` reproduce polynomials up to
+  their degree, and pixel values at the centers, to round-off.
+
+Normalizing by the sum of the weights fixes the flat image. Rounding or
+interpolating in the table, or computing the kernel directly, fixes the
+values at pixel centers.
+
+## 9. Lanczos blot near the edges uses a cut kernel, not the fill value
+
+**Severity:** wrong results within `order` pixels of the edges.
+
+The comment in `interpolate_lanczos` (`src/cdrizzleblot.c:551`) says
+that positions close to the edge return the missing value. The code
+instead clips the kernel to the image and sums what is left, without
+normalizing. For a flat image of ones, `lanczos3` gives 0.79 at
+`x = nx - 0.75` and 0.21 at `x = nx - 0.25`. For a linear image the
+error is 0.2-0.4 within 3 pixels of the edges. `poly3` and `poly5` use a
+reflection about the edge pixel there, and are exact for linear images.
+
+## 10. `poly3` and `poly5` blot of small images aborts or reads outside the image
+
+**Severity:** crash.
+
+`get_pixel_reflect_x` (`src/cdrizzleblot.c:372`) needs the requested
+pixel to be less than one image size beyond an edge. For `poly3` on
+images smaller than 3 pixels, and `poly5` on images smaller than 4
+pixels, in x or y, it is not, and nothing checks the image size before
+interpolating. With assertions compiled in, the assertion aborts the
+Python process ("Abort trap: 6", seen for `poly3` on 2x2 and `poly5` on
+3x3). Without them, it reads outside the image.
+
+## 11. `tblot` accepts `xmin`, `xmax`, `ymin`, `ymax` but ignores them
+
+**Severity:** minor.
+
+`tblot` (`src/cdrizzleapi.c:990`) validates the four limits and stores
+them in the parameters (`:1001`). `doblot` then loops over every output
+pixel (`src/cdrizzleblot.c:661`). With `xmin=10, xmax=20, ymin=5,
+ymax=15` on a 20x30 output, all 600 pixels are set, 479 of them outside
+the limits. The arguments should be removed, or used.
