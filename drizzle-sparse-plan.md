@@ -4,7 +4,7 @@
 in §8.1 and §8.2, step 4 (A vs B) decided in §6. Real-data check (§7.4)
 done, results in §7.1. Next steps (§11): 1-3 done, 4 (exact aperture
 variance) planned for later, 5 (in place of drizzle in the jwst steps) in
-progress.
+progress, 6 (components for outlier detection) planned.
 **Context date:** 2026-11-01
 **Reference code:** `spacetelescope/drizzle` `main` @ `59ff6a1` (2026-10-28)
 
@@ -797,3 +797,104 @@ Findings:
    Then in snowblind: the `ResampleImage` subclass and the `gwcs_blot`
    replacement, and a check against the stock steps on the 8 NIRCam
    exposures, in an environment with jwst and stcal.
+
+6. **Components for outlier detection** (agreed 2026-11-02). The step
+   itself will live in snowblind and call spizzle for the drizzle parts.
+   The aim is a reference image that predicts each exposure well enough
+   to compare it with the exposure, at a fraction of today's cost.
+
+   Today (jwst `outlier_detection`, imaging): each exposure is drizzled
+   alone (square kernel, pixfrac 1, the input pixel scale). The median
+   of those images is blotted back with bilinear interpolation. A pixel
+   is flagged where `|data - blot| > snr * err + scale * D`, with `D` the
+   largest difference between a blot pixel and its four neighbors (snr 5
+   and 4, scale 1.2 and 0.7, in two passes). The scheme was chosen for
+   its simplicity, not its accuracy (user). JWST PSFs are undersampled,
+   as is usual for space telescopes, and that is what makes the
+   comparison hard:
+   - a single exposure drizzled this way is bilinear interpolation (for
+     a shift), and the blot interpolates again, so cores are smoothed by
+     up to [1/4, 1/2, 1/4] along each axis;
+   - each image in the median comes from one exposure, so the median
+     cannot use the dithers to resolve the core;
+   - the `scale * D` term keeps star cores from being flagged, but it
+     also hides cosmic rays on and near stars.
+
+   Simulation, 2026-11-02: 4 exposures at random sub-pixel shifts, 60
+   stars with Gaussian cores integrated exactly over the pixels, no noise.
+   The error of each exposure's prediction at each star's peak pixel, as
+   a fraction of the peak:
+
+   | reference image | FWHM 1 px: median (95%) | 1.5 px | 2.5 px |
+   | --- | ---: | ---: | ---: |
+   | today: median of single images, scale 1, pixfrac 1 | 54% (63%) | 43% (50%) | 25% (29%) |
+   | median of single images, 2× finer grid | 24% (46%) | 16% (31%) | 7.5% (15%) |
+   | weighted median of drops, scale 1, pixfrac 1 | 54% (74%) | 37% (53%) | 18% (26%) |
+   | weighted median of drops, 2× finer grid, pixfrac 0.6 | 6.0% (23%) | 4.0% (13%) | 2.0% (6.3%) |
+   | same, plus one correction step | 2.6% (13%) | 1.5% (6.1%) | 0.7% (2.5%) |
+
+   "Drops" are the input pixels of all exposures that land on an output
+   pixel, weighted by their overlap. The correction step combines each
+   exposure's residual (data minus prediction) the same way and adds it
+   to the reference, as in Fruchter's iDrizzle (2011). Only the fine grid
+   and the drop-level combination together help.
+
+   Noise and cosmic rays, same setup on flat sky: unit Gaussian noise,
+   and 1% of each exposure's pixels hit by 20-200 sigma. Flags are set
+   at `|d - p| > 5 *` (noise of `d - p` for that scheme):
+
+   | reference image | noise of p | noise of d - p | cosmic rays found | false flags per 10^4 pixels |
+   | --- | ---: | ---: | ---: | ---: |
+   | today | 0.32 | 0.91 | 100% | 28 |
+   | weighted median of drops, 2× finer grid, pixfrac 0.6 | 0.56 | 0.75 | 99.6% | 59 |
+   | clipped mean of drops (3 sigma, 3 iterations, from the median) | 0.48 | 0.73 | 99.6% | 62 |
+   | mean of drops (plain drizzle) | 0.47 | 0.73 | 99.6% | 546 |
+
+   - The clipped mean recovers most of the noise the median costs (0.48
+     against 0.56; the plain mean has 0.47) and stays as robust, so it
+     should follow the median.
+   - Nearly all false flags lie within 1.5 px of a cosmic ray in another
+     exposure: the cosmic ray leaks into the reference where few drops
+     land. Elsewhere every scheme gives 2-3.5 per 10^4. Removing the
+     flagged pixels from the drops and recomputing the reference should
+     remove the leak; also to try: pixfrac, the grid, and a minimum
+     number of exposures per output pixel.
+   - With only 2 exposures no combination is robust. minmed is possible,
+     but its noise is even more doubtful (user).
+   - These are simulations; real JWST data will decide (user).
+
+   Work in spizzle (the drizzle parts only):
+   1. The drops of several exposures on one output grid: for each output
+      pixel, the input pixels of every exposure that land on it, with
+      their weights. This is the exposures' operators side by side, built
+      in tiles of the output to bound memory.
+   2. Robust combinations of the drops, in parallel over output pixels:
+      - weighted median;
+      - iterated clipped weighted mean, with sigma from the error arrays;
+      - weighted scatter of the drops, as a measured model-error term to
+        replace `scale * D` (it is large only where the exposures
+        disagree);
+      - a minimum number of exposures per output pixel.
+   3. The prediction of each exposure: `blot` of the reference with the
+      exposure's pixel map. Then the reference recomputed without the
+      flagged input pixels, and the correction step.
+   4. Sharing: one pixel map per exposure serves the reference grid (a
+      rescaled pixel map) and the final mosaic. The final `Coadd` gives
+      flagged pixels zero weight, so outlier detection and resampling
+      need no second evaluation of the WCS.
+
+   In snowblind: the step, its thresholds, the 2-exposure case, and
+   checks on real JWST data against jwst's flags, with injected cosmic
+   rays (NIRCam short and long wavelength, MIRI).
+
+   Ways that use no drizzle, to weigh in snowblind (spizzle would supply
+   the pixel maps onto a common frame):
+   - predict each exposure from the others interpolated directly onto
+     its pixels, then combine robustly: one interpolation, not two, but
+     still one undersampled exposure at a time;
+   - treat every pixel of every exposure as a sample of the scene at a
+     known sky position, and predict each pixel from the other exposures'
+     samples near it: a local robust fit, or kriging with a covariance
+     from the PSF;
+   - a forward model of the scene on a fine grid, solved robustly: every
+     pixel is the integral of the scene over its footprint.
