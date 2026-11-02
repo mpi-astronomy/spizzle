@@ -880,10 +880,40 @@ Findings:
    1 even for zero rows, so `_compact` read `counts[0]`. That was harmless
    on macOS and crashed on Linux. The offsets are now `cumsum(sizes) -
    sizes`, one per row. numba's `NUMBA_BOUNDSCHECK` does not catch this
-   inside `prange` loops, so it cannot guard CI. Open: lower
-   bounds for numba, numpy and scipy (none now; CI tests only the latest
-   versions), and whether the sdist should leave out
-   `drizzle-sparse-plan.md` and `drizzle-issues.md`.
+   inside `prange` loops, so it cannot guard CI. Open: whether
+   the sdist should leave out `drizzle-sparse-plan.md` and
+   `drizzle-issues.md`.
+
+   Lower bounds, 2026-11-02: `numba>=0.58`, `numpy>=1.25`,
+   `scipy>=1.14.1`, and `astropy>=6.1` for the tests. numpy, scipy and
+   astropy follow jwst 2.0's floors; numba 0.58 is the first release for
+   numpy 1.25 and Python 3.11. All 169 tests pass with Python 3.11 and
+   numba 0.58.1, numpy 1.25.2, scipy 1.14.1, astropy 6.1.7 and the float64
+   drizzle branch, in a scratch environment. No upper bounds.
+
+   CI tests the lower bounds without repeating them: its
+   oldest-dependencies job (Python 3.11) installs with uv's `--resolution
+   lowest-direct`, the lowest version that pyproject.toml allows for
+   each direct requirement and the newest for the rest. So the test
+   requirements have lower bounds too: `drizzle>=2.2` (as stcal 1.18;
+   replaced by the float64 branch), `pytest>=8.0`, `flake8>=7.0`,
+   `flake8-pyproject>=1.2.3`, `pytest-cov>=5.0`. uv resolves numba
+   0.58.0, numpy 1.25.0, scipy 1.14.1, astropy 6.1.0, pytest 8.0.0,
+   flake8 7.0.0, flake8-pyproject 1.2.3, pytest-cov 5.0.0; all 169 tests
+   pass with them and flake8 is clean (scratch environment, 2026-11-02).
+
+   Against the scientific Python ecosystem's SPEC 0 (checked
+   2026-11-02): for a release in 2026 Q4 it recommends Python >= 3.13,
+   numpy >= 2.3 and scipy >= 1.15. spizzle's floors are about two years
+   older, as jwst 2.0's are; more expansive is fine (user). They can move
+   to SPEC 0's when jwst raises its own.
+
+   Python 3.15 added to CI, 2026-11-02 (user): 3.15.2 is in setup-python,
+   and numba 0.68.1, llvmlite 0.50.0, numpy and scipy have cp315 wheels
+   (astropy and pyerfa have stable-ABI wheels). All 169 tests pass on
+   3.15.2 in a scratch environment, with deprecation warnings as errors.
+   jwst 3.0.0 still requires Python < 3.15, so the `jwst` extra does not
+   install on 3.15 yet; the tests do not need it.
 
 6. **Components for outlier detection** (agreed 2026-11-02). The step
    itself will live in snowblind and call spizzle for the drizzle parts.

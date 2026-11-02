@@ -15,10 +15,11 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 requires-python = ">=3.11"
+# CI tests these lower bounds, and those of the test requirements, on the oldest Python
 dependencies = [
-    "numba",
-    "numpy",
-    "scipy",
+    "numba>=0.58",  # the first numba for numpy 1.25 and Python 3.11
+    "numpy>=1.25",  # as jwst 2.0
+    "scipy>=1.14.1",  # as jwst 2.0
 ]
 dynamic = ['version']
 
@@ -28,15 +29,17 @@ docs = [
     "sphinx-automodapi",
     "numpydoc",
 ]
+# every test requirement has a lower bound too: the oldest-dependencies CI job installs the
+# lowest version that each direct requirement allows (uv's --resolution lowest-direct)
 test = [
     # the drizzle comparison tests need float64 output arrays in drizzle, not yet released;
     # CI installs jdavies-st/drizzle@float64-phase2-c-accepts-float64 over this
-    "drizzle",
-    "astropy",  # Covariance.write_correlation
-    "pytest",
-    "flake8",
-    "flake8-pyproject",
-    "pytest-cov",
+    "drizzle>=2.2",  # as stcal 1.18
+    "astropy>=6.1",  # Covariance.write_correlation; as jwst 2.0
+    "pytest>=8.0",
+    "flake8>=7.0",
+    "flake8-pyproject>=1.2.3",
+    "pytest-cov>=5.0",
 ]
 cff = [
     "cff-from-621",

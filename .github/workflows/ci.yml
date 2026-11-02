@@ -14,11 +14,17 @@ concurrency:
 
 jobs:
   test:
+    name: test (${{ matrix.python-version }}${{ matrix.resolution == 'lowest-direct' && ', oldest dependencies' || '' }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
+        resolution: ["highest"]
+        include:
+          # the lowest version of each requirement that pyproject.toml allows, on the oldest Python
+          - python-version: "3.11"
+            resolution: "lowest-direct"
 
     steps:
       - name: Checkout
@@ -34,11 +40,15 @@ jobs:
           cache: pip
 
       - name: Install
+        env:
+          RESOLUTION: ${{ matrix.resolution }}
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install ".[test]"
-          # the drizzle comparison tests need float64 output arrays, not yet in a drizzle release
-          python -m pip install "drizzle @ git+https://github.com/jdavies-st/drizzle.git@float64-phase2-c-accepts-float64"
+          python -m pip install --upgrade pip uv
+          uv pip install --system --resolution "$RESOLUTION" ".[test]"
+          # the drizzle comparison tests need float64 output arrays, not yet in a drizzle release;
+          # installed without its dependencies, so that it changes no other version
+          uv pip install --system --no-deps "drizzle @ git+https://github.com/jdavies-st/drizzle.git@float64-phase2-c-accepts-float64"
+          uv pip list --system | grep -i -E "^(numba|numpy|scipy|astropy|drizzle|pytest|flake8) "
 
       - name: Lint with flake8
         run: flake8 . --count --statistics
