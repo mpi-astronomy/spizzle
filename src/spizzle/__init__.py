@@ -4,6 +4,7 @@ from .geometry import corners, jacobian, overlap_triplets
 from .operator import build_operator, drizzle_operator, Operator, Coadd
 from .covariance import Covariance
 from .pixmap import pixel_map
+from .interpolation import blot
 
 
 try:
@@ -23,4 +24,5 @@ __all__ = [
     'Coadd',
     'Covariance',
     'pixel_map',
+    'blot',
 ]

@@ -64,10 +64,11 @@ class Exposure:
             dq = hdus["DQ"].data
             exptime = hdus[0].header["EFFEXPTM"]
             tree = hdus["ASDF"].data.tobytes()
-        # the tree also refers to the FITS arrays, which asdf cannot resolve here
+        # the tree also refers to the FITS arrays, which asdf cannot resolve
+        # here, so its blocks stay unloaded
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", asdf.exceptions.AsdfConversionWarning)
-            with asdf.open(io.BytesIO(tree), lazy_load=False, memmap=False) as af:
+            with asdf.open(io.BytesIO(tree), lazy_load=True, memmap=False) as af:
                 self.wcs = af.tree["meta"]["wcs"]
         good = (dq & (DO_NOT_USE | NON_SCIENCE)) == 0
         if weight_type == "ivm":

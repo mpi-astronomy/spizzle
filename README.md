@@ -25,6 +25,8 @@ image is those sums divided by the output weights.
    WCS, by default interpolated from the WCS on a coarse grid
  - `Covariance`: the covariance between nearby pixels of the co-added
    image, for independent input noise
+ - `blot`: a mosaic interpolated back onto an exposure's pixel grid, as
+   drizzle's bilinear `blot_image`, for outlier detection
 
 
 # How it compares with drizzle
@@ -172,10 +174,32 @@ radius 2 (native scale, pixfrac 1), 1.4 GiB for the NIRCam mosaic above.
 Checked against noise realizations, and for evenly dithered exposures it
 gives Casertano's correction to about 1% (`benchmarks/check_covariance.py`).
 
-The geometry, `build_operator` and `Coadd.add` run on numba's threads;
-set their number with `numba.set_num_threads` or the `NUMBA_NUM_THREADS`
-environment variable.  The results do not depend on the number of
-threads.
+Outlier detection compares each exposure with the median of the
+resampled exposures, interpolated back onto the exposure's pixels.
+`blot` does that interpolation, bilinear as drizzle's `blot_image` with
+`interp="linear"` (as stcal's `gwcs_blot` uses it), and matches it bit for
+bit.  Its pixel map is the exposure's pixel map onto the grid of the
+median, the same one that resampled it:
+
+```python
+from spizzle import blot, pixel_map
+
+pixmap = pixel_map(wcs, wcs_median, shape=data.shape)
+blotted = blot(median, pixmap)            # NaN where nothing maps
+blotted_err = blot(median_err, pixmap)
+```
+
+For a NIRCam exposure and a median the size of the native mosaic above,
+blotting the median and its error takes 0.029 s, against 1.6 s for two
+calls of stcal's `gwcs_blot`, each of which evaluates the WCS for every
+pixel.  Most of the gain is the pixel map: computed once, from the
+splines; `blot` itself takes 4 ms on 11 threads against 29 ms for
+drizzle's.
+
+The geometry, `build_operator`, `Coadd.add` and `blot` run on numba's
+threads; set their number with `numba.set_num_threads` or the
+`NUMBA_NUM_THREADS` environment variable.  The results do not depend on
+the number of threads.
 
 
 # Citing spizzle
@@ -196,6 +220,7 @@ arrays.  Until that is in a drizzle release, install it from the branch:
 # License
 
 BSD 3-clause, see `LICENSE`.  The overlap geometry in `spizzle.geometry`
-is ported from drizzle, Copyright (C) 2011,2014 Association of
-Universities for Research in Astronomy (AURA), under the BSD 3-clause
-license in `licenses/DRIZZLE_LICENSE.rst`.
+and the bilinear interpolation of `blot` are ported from drizzle,
+Copyright (C) 2011,2014 Association of Universities for Research in
+Astronomy (AURA), under the BSD 3-clause license in
+`licenses/DRIZZLE_LICENSE.rst`.

@@ -43,6 +43,10 @@ pixel, the factor by which the variance of sums over large areas exceeds
 the sum of the pixel variances, so that ``sqrt(var * noise_factor)`` is the
 uncertainty for aperture photometry.
 
+`blot` interpolates an image, such as the median of resampled exposures,
+back onto an exposure's pixels with the exposure's pixel map, bilinear as
+drizzle's ``blot_image``, for outlier detection.
+
 Reference
 ---------
 

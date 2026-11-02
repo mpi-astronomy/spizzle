@@ -3,7 +3,8 @@
 **Status:** first milestone done: steps 1-2 in `fc5db6d`, step 3 (benchmarks)
 in §8.1 and §8.2, step 4 (A vs B) decided in §6. Real-data check (§7.4)
 done, results in §7.1. Next steps (§11): 1-3 done, 4 (exact aperture
-variance) planned for later.
+variance) planned for later, 5 (in place of drizzle in the jwst steps) in
+progress.
 **Context date:** 2026-11-01
 **Reference code:** `spacetelescope/drizzle` `main` @ `59ff6a1` (2026-10-28)
 
@@ -713,3 +714,73 @@ Findings:
      correlation images is a question for its maintainers, once the
      ResampleStep products are settled.
 
+5. **spizzle in place of drizzle in `ResampleStep` and
+   `OutlierDetectionStep`** (agreed 2026-11-02). The caller will live in
+   snowblind: a subclass of jwst's `ResampleImage`, the class both steps
+   build, plus a replacement for stcal's `gwcs_blot`.
+
+   Where drizzle is called (stcal upstream main 2026-10-07, jwst main
+   2026-10-09):
+   - `stcal.resample.Resample`, the base of `ResampleImage`: a `Drizzle`
+     for the science image (a second one for `compute_err="driz_err"`),
+     and for every exposure a new full-frame `Drizzle` for each of its
+     three variance planes. Pixel maps come from stcal's `calc_pixmap`.
+   - Outlier detection: `stcal.outlier_detection.utils.gwcs_blot` calls
+     drizzle's `blot_image` with `interp="linear"`. jwst calls it twice
+     per exposure, for the median and for its error, and each call
+     computes the pixel map again. That pixel map is the one used to
+     resample the exposure onto the median grid.
+   - Spectral resampling uses the same stcal class with a 3D WCS; it stays
+     on drizzle.
+
+   Decisions (user, 2026-11-02):
+   - Weights: inverse variance of the background, zero where DQ has
+     DO_NOT_USE, as stcal does. This gives the science mosaic itself the
+     best noise; spizzle takes the weights it is given.
+   - stcal's VAR and ERR in the mosaic are a rough attempt at the noise
+     of sums over areas. They are not reproduced by default. The mosaic
+     gets the exact pixel variances (`Coadd.out_var`), the noise factor
+     as a separate plane, and ERR = `sqrt(sum of VAR * noise factor)`.
+   - A mode that computes stcal's VAR from the operator is useful as a
+     sanity check against the stock pipeline, but is not the default.
+   - No DQ propagation.
+   - No "INDEF" anywhere: fill values are numbers (NaN by default).
+
+   Work in spizzle, in order:
+   1. `blot`: bilinear, ported from drizzle's `interpolate_bilinear` and
+      `doblot` so that it matches drizzle bit for bit; then a threaded,
+      faster version.
+   2. Restrict an exposure to a range of input pixels (stcal's
+      `xmin`/`xmax`/`ymin`/`ymax` from the bounding box), with an
+      interface of its own rather than drizzle's.
+   3. stcal's variance from the operator, off by default.
+   4. The noise factor in two passes: `Coadd` first, for the weight
+      sums, then the covariance of each exposure added straight into
+      one noise-factor sum.
+   5. Packaging, so that snowblind can depend on spizzle.
+
+   Item 1 done, 2026-11-02: `spizzle.blot(data, pixmap, fillval=nan,
+   iscale=1.0, out=None)` in `spizzle/interpolation.py`, bit for bit
+   equal to drizzle's `tblot` with `interp="linear"`. This holds for
+   float32 and float64 data and output, the last row, column and pixel,
+   and positions that are NaN or outside the image. Released drizzle
+   2.2.0 interpolates in single precision and differs by up to 1e-5. Each
+   pixel is independent, so the rows run in parallel:
+
+   | blot of 2048² from a 5579×4380 float32 median | time |
+   | --- | ---: |
+   | drizzle `tblot` (C, one thread) | 29 ms |
+   | spizzle, one thread | 23 ms |
+   | spizzle, 11 threads | 3.7 ms |
+
+   On a real `nrcalong` exposure, as jwst blots in outlier detection
+   (median and error, each a `gwcs_blot` call with its own `calc_pixmap`
+   of every pixel): 1.61 s. With one `pixel_map` for both and two `blot`
+   calls, 0.26 s with `stepsize=1`, bit for bit equal to stcal's, and
+   0.029 s with the default splines (at most 2.4e-7 different, about one
+   float32 rounding step). The pixel map is nearly all of the cost, so a
+   faster interpolation would gain little more.
+
+   Then in snowblind: the `ResampleImage` subclass and the `gwcs_blot`
+   replacement, and a check against the stock steps on the 8 NIRCam
+   exposures, in an environment with jwst and stcal.

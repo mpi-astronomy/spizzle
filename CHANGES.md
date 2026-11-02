@@ -34,6 +34,10 @@ First release.
   for the noise of sums over areas; `correlation` the correlation with a
   neighbor; and `write_correlation` writes all correlation images to a
   separate FITS file (needs astropy).
+- `blot`: an image interpolated at the positions of a pixel map, as
+  drizzle's `blot_image` with bilinear interpolation, which stcal's
+  `gwcs_blot` uses for outlier detection.  It matches drizzle bit for
+  bit, NaN positions included, and runs in parallel on numba's threads.
 - `Operator.reach`: the largest distance in y or x between two output
   pixels that share an input pixel, beyond which drizzled noise is
   uncorrelated.
