@@ -553,11 +553,12 @@ Findings:
    resampled one at a time onto an output grid 2-10× their area; the goal
    is a better estimate of the mosaic's uncertainty. The 12 correlation
    images stay out of the output mosaic, optionally in a separate file; a
-   per-pixel noise factor map could replace the ERR array. (Note: the
-   current ERR, `sqrt(var)`, is exact for single pixels;
+   per-pixel noise factor map could replace the ERR array. (Note:
+   spizzle's `out_var` is exact for single pixels;
    `sqrt(var * noise_factor)` is right for sums over areas larger than an
    input pixel's footprint, such as apertures, and overstates single-pixel
-   errors by `sqrt(noise_factor)`.)
+   errors by `sqrt(noise_factor)`. The pipeline's VAR planes are not the
+   exact pixel variance; see "stcal's variance" below.)
 
    Then, 2026-11-01:
    - `Operator.reach`, the largest distance in y or x between two output
@@ -607,20 +608,36 @@ Findings:
    inside the circle, on the native NIRCam mosaic above (1500 random
    apertures per radius, in variance):
 
-   | aperture radius | var × noise factor / exact: median (5-95%) | var / exact: median |
-   | ---: | ---: | ---: |
-   | 1.5 px | 1.27 (1.23-1.35) | 0.56 |
-   | 2 px | 1.28 (1.23-1.39) | 0.57 |
-   | 3 px | 1.17 (1.10-1.28) | 0.52 |
-   | 5 px | 1.09 (1.04-1.17) | 0.48 |
-   | 10 px | 1.04 (1.01-1.10) | 0.46 |
-   | 20 px | 1.02 (1.01-1.05) | 0.45 |
+   | aperture radius | var × noise factor / exact: median (5-95%) | var / exact: median | stcal VAR / exact: median (5-95%) |
+   | ---: | ---: | ---: | ---: |
+   | 1.5 px | 1.27 (1.23-1.35) | 0.56 | 1.23 (1.09-1.29) |
+   | 2 px | 1.28 (1.23-1.39) | 0.57 | 1.24 (1.09-1.31) |
+   | 3 px | 1.17 (1.10-1.28) | 0.52 | 1.13 (0.98-1.19) |
+   | 5 px | 1.09 (1.04-1.17) | 0.48 | 1.05 (0.93-1.11) |
+   | 10 px | 1.04 (1.01-1.10) | 0.46 | 0.99 (0.89-1.04) |
+   | 20 px | 1.02 (1.01-1.05) | 0.45 | 0.95 (0.88-0.99) |
 
-   The variance alone, as in ERR now, underestimates aperture errors by
+   The exact pixel variance alone underestimates aperture errors by
    25-33%; with the noise factor they are 13% too large at 1.5-2 px,
    4.5% at 5 px, 1% at 20 px. The excess is the covariance across the
    aperture edge, which depends on the aperture, so no per-pixel plane
    removes it; the exact value needs the correlation images.
+
+   stcal's variance (measured 2026-11-02, same mosaic): `stcal.resample`
+   does not propagate the variance through the drizzle weights. For each
+   exposure and variance plane it drizzles `sqrt(var)` as an image (a
+   weighted mean of the errors) and squares the result. It then combines
+   the exposures with weights of one over the resampled read-noise
+   variance (or the exposure time), not the drizzle weights. For imaging
+   it also divides by the pixel scale ratio squared. Reproduced with
+   drizzle on the 8 exposures, stcal's total VAR is 2.23× the exact pixel
+   variance (5-95%: 1.55-3.22), and 0.97× the exact variance times the
+   noise factor (5-95%: 0.84-1.04). So at native scale with pixfrac 1, the
+   pipeline's VAR planes already approximate `var * noise_factor`. As the
+   last column shows, for apertures they are close to it, with a wider
+   spread, and 5% low at 20 px. Not yet measured: other pixfrac values
+   and scales, where the pixel scale ratio factor is all that stcal
+   applies.
 
    The exact correction also varies across the mosaic (distortion, the
    local dither overlap, weights), so one factor per aperture size does
