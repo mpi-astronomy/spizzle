@@ -199,3 +199,16 @@ them in the parameters (`:1001`). `doblot` then loops over every output
 pixel (`src/cdrizzleblot.c:661`). With `xmin=10, xmax=20, ymin=5,
 ymax=15` on a 20x30 output, all 600 pixels are set, 479 of them outside
 the limits. The arguments should be removed, or used.
+
+## 12. Fill values are strings
+
+**Severity:** interface.
+**spizzle:** fill values are numbers, NaN by default; "INDEF" is not
+accepted anywhere (user, 2026-11-02).
+
+`tdriz` takes `fillstr` and `fillstr2` as strings: "INDEF" (leave the
+pixels as they are, the default), "NaN", or a number parsed with
+`strtod` (`src/cdrizzleapi.c:340`, `:486`). `Drizzle(fillval=...)`
+converts its argument to such a string. `tblot` already takes `fillval`
+as a number. The fill value should be a float, with NaN as the default;
+"INDEF" is a remnant of IRAF.

@@ -163,11 +163,19 @@ def build_operator(triplets, jaco, out_shape, weights=None, weight_scale=1.0):
     return Operator(matrix, (slice(y0, y1), slice(x0, x1)), (ny_out, nx_out), int(reach.max()))
 
 
-def drizzle_operator(pixmap, out_shape, pixfrac=1.0, weights=None, weight_scale=1.0):
+def drizzle_operator(pixmap, out_shape, pixfrac=1.0, weights=None, weight_scale=1.0, region=None):
     """Drizzle operator of one exposure, square kernel.
 
     `corners`, `jacobian`, `overlap_triplets` and `build_operator` in turn.
     Call those directly to keep the geometry and re-weight it.
+
+    With ``region``, only the input pixels in it are drizzled, as with
+    drizzle's ``xmin``, ``xmax``, ``ymin`` and ``ymax``; the others are not
+    visited, which saves their overlap geometry.  Their corners still come
+    from the whole pixel map, so the region's edge pixels are the same as
+    without it.  To leave out other pixels, give them zero weight: entries
+    of zero weight are left out of the operator, so their data are never
+    used.
 
     Parameters
     ----------
@@ -181,13 +189,16 @@ def drizzle_operator(pixmap, out_shape, pixfrac=1.0, weights=None, weight_scale=
         Input pixel weights; all 1 if not given.
     weight_scale : float
         Factor applied to the weights, drizzle's ``wht_scale``.
+    region : tuple of slice, optional
+        ``(slice(y0, y1), slice(x0, x1))`` of the input pixels to drizzle;
+        all by default.  See `overlap_triplets`.
 
     Returns
     -------
     Operator
     """
     c = corners(pixmap, pixfrac)
-    return build_operator(overlap_triplets(c, out_shape), jacobian(c), out_shape, weights, weight_scale)
+    return build_operator(overlap_triplets(c, out_shape, region), jacobian(c), out_shape, weights, weight_scale)
 
 
 class Coadd:

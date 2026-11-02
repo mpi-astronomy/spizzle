@@ -41,6 +41,12 @@ First release.
   It accepts positions over the image's extent, `[-0.5, n - 0.5)`, where
   drizzle accepts `[0, n)`, and holds the edge values beyond the
   outermost pixel centers.
+- `NoiseFactor`: the noise factor of `Covariance`, at every offset, from
+  two output-sized sums instead of one per offset, in a second pass over
+  the exposures with the weight sums of the first (`Coadd.out_wht`).
+- `drizzle_operator` and `overlap_triplets` take `region`, a pair of
+  slices of the input pixels to drizzle, as drizzle's `xmin`, `xmax`,
+  `ymin` and `ymax`; the geometry of the other pixels is not computed.
 - `Operator.reach`: the largest distance in y or x between two output
   pixels that share an input pixel, beyond which drizzled noise is
   uncorrelated.

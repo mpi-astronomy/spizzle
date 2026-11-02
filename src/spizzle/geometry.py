@@ -93,13 +93,14 @@ def jacobian(corners):
     return _jacobian(corners)
 
 
-def overlap_triplets(corners, out_shape):
+def overlap_triplets(corners, out_shape, region=None):
     """Overlap areas of input pixel quadrilaterals with output pixels.
 
-    Every input pixel with finite corners is visited; output pixels outside
-    ``out_shape`` are left out.  The triplets are in input pixel order (row
-    by row) and, within an input pixel, in output pixel order, which is the
-    order in which drizzle adds the contributions to each output pixel.
+    Every input pixel with finite corners is visited, or only those in
+    ``region``; output pixels outside ``out_shape`` are left out.  The
+    triplets are in input pixel order (row by row) and, within an input
+    pixel, in output pixel order, which is the order in which drizzle adds
+    the contributions to each output pixel.
 
     Parameters
     ----------
@@ -107,6 +108,10 @@ def overlap_triplets(corners, out_shape):
         From `corners`.
     out_shape : tuple of int
         ``(ny_out, nx_out)``.
+    region : tuple of slice, optional
+        ``(slice(y0, y1), slice(x0, x1))``, the input pixels to visit, as
+        drizzle's ``xmin`` to ``xmax`` and ``ymin`` to ``ymax`` with
+        ``x1 = xmax + 1`` and ``y1 = ymax + 1``; by default all of them.
 
     Returns
     -------
@@ -122,21 +127,40 @@ def overlap_triplets(corners, out_shape):
     if corners.ndim != 4 or corners.shape[2:] != (4, 2):
         raise ValueError(f"corners must have shape (ny, nx, 4, 2), not {corners.shape}")
     ny_out, nx_out = out_shape
+    j0, j1, i0, i1 = _region_bounds(region, corners.shape[:2])
 
     # each row writes its candidates into its own slice, sized by the bounding boxes
-    sizes = _count_candidates(corners, ny_out, nx_out)
-    starts = np.concatenate([[0], np.cumsum(sizes)[:-1]])
+    sizes = _count_candidates(corners, j0, j1, i0, i1, ny_out, nx_out)
+    starts = np.concatenate([[0], np.cumsum(sizes)[:-1]]).astype(np.int64)
     total = int(sizes.sum())
     in_idx = np.empty(total, dtype=np.int64)
     out_idx = np.empty(total, dtype=np.int64)
     area = np.empty(total, dtype=np.float64)
-    counts = _fill_triplets(corners, ny_out, nx_out, starts, in_idx, out_idx, area)
+    counts = _fill_triplets(corners, j0, j1, i0, i1, ny_out, nx_out, starts, in_idx, out_idx, area)
 
-    new_starts = np.concatenate([[0], np.cumsum(counts)[:-1]])
+    new_starts = np.concatenate([[0], np.cumsum(counts)[:-1]]).astype(np.int64)
     n = int(counts.sum())
     triplets = (np.empty(n, dtype=np.int64), np.empty(n, dtype=np.int64), np.empty(n, dtype=np.float64))
     _compact(starts, counts, new_starts, in_idx, out_idx, area, *triplets)
     return triplets
+
+
+def _region_bounds(region, shape):
+    """``(j0, j1, i0, i1)``, the rows ``j0:j1`` and columns ``i0:i1`` of ``region`` within an input of ``shape``."""
+    ny, nx = shape
+    if region is None:
+        return 0, ny, 0, nx
+    if len(region) != 2:
+        raise ValueError(f"region must be a pair of slices, not {region!r}")
+    bounds = []
+    for s, n in zip(region, shape):
+        if not isinstance(s, slice):
+            raise ValueError(f"region must be a pair of slices, not {region!r}")
+        start, stop, step = s.indices(n)
+        if step != 1:
+            raise ValueError(f"region slices must have step 1, not {step}")
+        bounds += [start, max(start, stop)]
+    return tuple(bounds)
 
 
 @numba.njit(parallel=True, cache=True, error_model="numpy")
@@ -171,7 +195,7 @@ def _corners(pixmap, h):
 
 @numba.njit(cache=True, error_model="numpy")
 def _interpolate_point(pixmap, xin, yin, out, j, i, k):
-    """Bilinear interpolation of the pixel map at one input point, as drizzle's ``interpolate_point``.
+    """Bilinear interpolation of the pixel map at one input point, asdrizzle's ``interpolate_point``.
 
     Points beyond the outer pixel centers are extrapolated from the outer
     2x2 block.
@@ -425,53 +449,58 @@ def _boxer(is_, js, x0, y0, x1, y1, x2, y2, x3, y3):
 
 
 @numba.njit(parallel=True, cache=True, error_model="numpy")
-def _count_candidates(corners, ny_out, nx_out):
-    """Number of output pixels in the bounding boxes of each input row.
+def _count_candidates(corners, j0, j1, i0, i1, ny_out, nx_out):
+    """Number of output pixels in the bounding boxes of each input row of the region.
 
     Parameters
     ----------
     corners : ndarray, shape (ny, nx, 4, 2)
+    j0, j1, i0, i1 : int
+        Rows ``j0:j1`` and columns ``i0:i1`` of the input to visit.
     ny_out, nx_out : int
 
     Returns
     -------
-    ndarray of int64, shape (ny,)
+    ndarray of int64, shape (j1 - j0,)
     """
-    ny, nx = corners.shape[0], corners.shape[1]
-    sizes = np.zeros(ny, dtype=np.int64)
-    for j in numba.prange(ny):
+    sizes = np.zeros(j1 - j0, dtype=np.int64)
+    for r in numba.prange(j1 - j0):
+        j = j0 + r
         n = 0
-        for i in range(nx):
+        for i in range(i0, i1):
             ii0, ii1, jj0, jj1 = _output_box(corners, j, i, ny_out, nx_out)
             if ii1 >= ii0 and jj1 >= jj0:
                 n += (ii1 - ii0 + 1) * (jj1 - jj0 + 1)
-        sizes[j] = n
+        sizes[r] = n
     return sizes
 
 
 @numba.njit(parallel=True, cache=True, error_model="numpy")
-def _fill_triplets(corners, ny_out, nx_out, starts, in_idx, out_idx, area):
-    """Write the non-zero overlaps of each input row from ``starts[row]`` on.
+def _fill_triplets(corners, j0, j1, i0, i1, ny_out, nx_out, starts, in_idx, out_idx, area):
+    """Write the non-zero overlaps of each input row of the region from ``starts[row - j0]`` on.
 
     Parameters
     ----------
     corners : ndarray, shape (ny, nx, 4, 2)
+    j0, j1, i0, i1 : int
+        Rows ``j0:j1`` and columns ``i0:i1`` of the input to visit.
     ny_out, nx_out : int
-    starts : ndarray of int64, shape (ny,)
+    starts : ndarray of int64, shape (j1 - j0,)
         First slot of each row in the output arrays.
     in_idx, out_idx, area : ndarray
         Filled in place.
 
     Returns
     -------
-    ndarray of int64, shape (ny,)
+    ndarray of int64, shape (j1 - j0,)
         Number of overlaps written for each row.
     """
-    ny, nx = corners.shape[0], corners.shape[1]
-    counts = np.zeros(ny, dtype=np.int64)
-    for j in numba.prange(ny):
-        n = starts[j]
-        for i in range(nx):
+    nx = corners.shape[1]
+    counts = np.zeros(j1 - j0, dtype=np.int64)
+    for r in numba.prange(j1 - j0):
+        j = j0 + r
+        n = starts[r]
+        for i in range(i0, i1):
             ii0, ii1, jj0, jj1 = _output_box(corners, j, i, ny_out, nx_out)
             x0 = corners[j, i, 0, 0]
             y0 = corners[j, i, 0, 1]
@@ -489,7 +518,7 @@ def _fill_triplets(corners, ny_out, nx_out, starts, in_idx, out_idx, area):
                         out_idx[n] = jj * nx_out + ii
                         area[n] = a
                         n += 1
-        counts[j] = n - starts[j]
+        counts[r] = n - starts[r]
     return counts
 
 

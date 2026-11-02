@@ -148,7 +148,8 @@ def run_drizzle(exposures, pixmaps, out_shape, pixfrac, dtype):
             in_units="cps",
             expscale=1.0,
             wtscale=1.0,
-            fillstr="INDEF",
+            # tdriz takes the fill value as a string
+            fillstr=str(np.nan),
         )
         times.append(time.perf_counter() - t0)
     return out, {f"drizzle tdriz, {np.dtype(dtype).name} outputs, science + 3 variance planes": times}

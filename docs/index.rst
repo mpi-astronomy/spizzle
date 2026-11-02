@@ -42,6 +42,9 @@ with the variance of its exposure.  Its ``noise_factor`` is, for each
 pixel, the factor by which the variance of sums over large areas exceeds
 the sum of the pixel variances, so that ``sqrt(var * noise_factor)`` is the
 uncertainty for aperture photometry.
+`NoiseFactor` gives the same factor from two sums instead of one per
+offset, in a second pass over the exposures once `Coadd` has their weight
+sums.
 
 `blot` interpolates an image, such as the median of resampled exposures,
 back onto an exposure's pixels with the exposure's pixel map, bilinear as

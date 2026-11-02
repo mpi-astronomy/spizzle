@@ -798,6 +798,31 @@ Findings:
    replacement, and a check against the stock steps on the 8 NIRCam
    exposures, in an environment with jwst and stcal.
 
+   Items 2 and 4 done, 2026-11-02:
+   - `drizzle_operator(..., region=(slice(y0, y1), slice(x0, x1)))`, also
+     in `overlap_triplets`: only the input pixels in the region are
+     visited, and their corners still come from the whole pixel map. It
+     matches drizzle's `xmin`/`xmax`/`ymin`/`ymax`, which are inclusive.
+     Zero weights were already left out of the operator, so they never
+     let NaN data through; the region only saves geometry.
+   - `NoiseFactor(wsum)`: the noise factor in a second pass, with `wsum`
+     from the first pass (`Coadd.out_wht`). Each exposure adds
+     `T += W @ (var * (W.T @ (1 / wsum)))` and `V += (W * W) @ var`, and
+     `noise_factor = wsum * T / V`. That is every offset, with no radius
+     and no reach, in 16 bytes per output pixel instead of 60 (radius 2)
+     or 108 (radius 3).
+   - The 8 `nrcalong` exposures (`benchmarks/check_covariance.py`): the
+     second pass takes 4.9 s (read 1.2 s, `pixel_map` 0.18 s,
+     `drizzle_operator` 2.5 s, `NoiseFactor.add` 0.98 s), the first pass
+     5.7 s. The sums take 0.36 GiB, against 1.37 GiB for `Covariance`.
+     The factor agrees with `Covariance.noise_factor` to 1.4e-7 (median
+     2.3e-8), the float32 rounding of `Covariance`'s sums. Of
+     `NoiseFactor.add`, about half is scipy's single-threaded `W.T @ x`,
+     which could run in parallel later.
+   - drizzle's `tdriz` takes its fill value only as a string; the tests
+     and benchmarks now pass `str(np.nan)` instead of "INDEF"
+     (`drizzle-issues.md`, issue 12).
+
 6. **Components for outlier detection** (agreed 2026-11-02). The step
    itself will live in snowblind and call spizzle for the drizzle parts.
    The aim is a reference image that predicts each exposure well enough

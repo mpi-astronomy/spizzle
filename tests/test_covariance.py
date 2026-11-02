@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from spizzle import Coadd, Covariance, drizzle_operator
+from spizzle import Coadd, Covariance, NoiseFactor, drizzle_operator
 
 SHAPE, OUT_SHAPE = (12, 15), (40, 45)
 
@@ -207,6 +207,86 @@ def test_noise_factor_of_two_exposures_matches_dense_covariance():
         cov.add(op, var)
 
     np.testing.assert_allclose(cov.noise_factor, expected, rtol=1e-12, equal_nan=True)
+
+
+def weight_sums(ops, out_shape):
+    """Coadd.out_wht of the operators, each added with data of ones: the first pass of NoiseFactor."""
+    coadd = Coadd(out_shape)
+    for op in ops:
+        coadd.add(op, np.ones(op.matrix.shape[1]))
+    return coadd.out_wht
+
+
+def test_noise_factor_in_two_passes_of_half_pixel_shift():
+    """NoiseFactor of an input shifted +0.5 pixel in x gives (0.5 + 2 * 0.25) / 0.5 = 2 in output columns 2-6."""
+    op = drizzle_operator(identity_pixmap((6, 8)) + [0.5, 0.0], (6, 9))
+    nf = NoiseFactor(weight_sums([op], (6, 9)))
+
+    nf.add(op, np.ones((6, 8)))
+
+    np.testing.assert_allclose(nf.noise_factor[:, 2:7], np.full((6, 5), 2.0), rtol=1e-12)
+
+
+def test_noise_factor_in_two_passes_of_identity_is_one():
+    """NoiseFactor of an exposure on an identical grid, with no correlation, is 1."""
+    op = drizzle_operator(identity_pixmap((5, 6)), (5, 6))
+    nf = NoiseFactor(weight_sums([op], (5, 6)))
+
+    nf.add(op, random_image((5, 6), 1.0, 2.0, seed=1))
+
+    np.testing.assert_allclose(nf.noise_factor, np.ones((5, 6)), rtol=1e-12)
+
+
+def test_noise_factor_in_two_passes_matches_dense_covariance():
+    """NoiseFactor of two rotated, weighted exposures equals the dense row sum of C over its diagonal, to 1e-12."""
+    ops, variances = two_exposures()
+    C = dense_covariance(ops, variances)
+    expected = (np.nansum(C, axis=1) / np.diag(C)).reshape(OUT_SHAPE)
+    nf = NoiseFactor(weight_sums(ops, OUT_SHAPE))
+
+    for op, var in zip(ops, variances):
+        nf.add(op, var)
+
+    np.testing.assert_allclose(nf.noise_factor, expected, rtol=1e-12, equal_nan=True)
+
+
+def test_noise_factor_in_two_passes_matches_covariance():
+    """NoiseFactor of two rotated exposures, with iscale 1.5 and 0.7, equals Covariance.noise_factor in float64, to 1e-12."""
+    ops, variances = two_exposures()
+    cov = Covariance(OUT_SHAPE, radius=3, dtype=np.float64)
+    nf = NoiseFactor(weight_sums(ops, OUT_SHAPE))
+
+    for op, var, iscale in zip(ops, variances, [1.5, 0.7]):
+        cov.add(op, var, iscale=iscale)
+        nf.add(op, var, iscale=iscale)
+
+    np.testing.assert_allclose(nf.noise_factor, cov.noise_factor, rtol=1e-12, equal_nan=True)
+
+
+def test_noise_factor_in_two_passes_fills_pixels_without_weight():
+    """NoiseFactor of a 6x8 identity exposure on a 6x12 output gives the fill value -1 in output columns 8-11."""
+    op = drizzle_operator(identity_pixmap((6, 8)), (6, 12))
+    nf = NoiseFactor(weight_sums([op], (6, 12)), fillval=-1.0)
+
+    nf.add(op, np.ones((6, 8)))
+
+    np.testing.assert_array_equal(nf.noise_factor[:, 8:], np.full((6, 4), -1.0))
+
+
+def test_noise_factor_rejects_an_exposure_outside_the_weight_sums():
+    """NoiseFactor.add of an exposure onto output pixels whose weight sums are zero raises ValueError."""
+    nf = NoiseFactor(np.zeros((5, 6)))
+
+    with pytest.raises(ValueError, match="weight"):
+        nf.add(drizzle_operator(identity_pixmap((5, 6)), (5, 6)), np.ones((5, 6)))
+
+
+def test_noise_factor_in_two_passes_needs_an_exposure():
+    """NoiseFactor.noise_factor before any exposure is added raises ValueError."""
+    nf = NoiseFactor(np.ones((5, 6)))
+
+    with pytest.raises(ValueError, match="no exposure"):
+        nf.noise_factor
 
 
 def test_covariance_in_float32_is_close_to_float64():

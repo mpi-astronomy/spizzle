@@ -24,7 +24,9 @@ Run from the repository root::
    a mosaic frame enclosing them all, with `Coadd` and a `Covariance` of
    the total variance (float32, radius from the operators' reach): the
    time of each step, the noise factor, writing the correlation file, and
-   the peak resident memory.
+   the peak resident memory.  Then a second pass over the exposures with
+   `NoiseFactor`, from the weight sums of the first, against the noise
+   factor of `Covariance`.
 """
 
 import argparse
@@ -33,7 +35,7 @@ import warnings
 
 import numpy as np
 
-from spizzle import Coadd, Covariance, drizzle_operator
+from spizzle import Coadd, Covariance, NoiseFactor, drizzle_operator
 
 
 def rotated_pixmap(shape, degrees, scale, center):
@@ -155,9 +157,29 @@ def real_data(files, out_dir):
                 steps[step] += t1 - t0
             del e, pixmap, op
 
+        # the noise factor alone, in a second pass with the weight sums of the first
+        nf = NoiseFactor(coadd.out_wht)
+        second = dict.fromkeys(["read", "pixel_map", "drizzle_operator", "NoiseFactor.add"], 0.0)
+        for path in files:
+            t = [time.perf_counter()]
+            e = Exposure(path, "ivm")
+            t.append(time.perf_counter())
+            pixmap = pixel_map(e.wcs, wcs_out, shape=e.data.shape)
+            t.append(time.perf_counter())
+            op = drizzle_operator(pixmap, out_shape, pixfrac=1.0, weights=e.weights)
+            t.append(time.perf_counter())
+            nf.add(op, sum(e.variances))
+            t.append(time.perf_counter())
+            for step, t0, t1 in zip(second, t[:-1], t[1:]):
+                second[step] += t1 - t0
+            del e, pixmap, op
+
     t0 = time.perf_counter()
     factor = cov.noise_factor
     t_factor = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    factor2 = nf.noise_factor
+    t_factor2 = time.perf_counter() - t0
     path = os.path.join(out_dir, "correlation.fits")
     t0 = time.perf_counter()
     cov.write_correlation(path, overwrite=True)
@@ -179,6 +201,18 @@ def real_data(files, out_dir):
           f"peak resident memory {peak:.2f} GiB")
     print(f"noise factor over the {weighted.sum()} pixels with weight: median {np.median(factor[weighted]):.3f}, "
           f"5% {np.percentile(factor[weighted], 5):.3f}, 95% {np.percentile(factor[weighted], 95):.3f}")
+
+    print("\nSecond pass, NoiseFactor from the weight sums of the first:\n")
+    print("| step | total |")
+    print("| --- | ---: |")
+    for step, total in second.items():
+        print(f"| {step} | {total:.2f} s |")
+    print(f"| noise_factor | {t_factor2:.2f} s |")
+    nf_bytes = nf._total.nbytes + nf._vnum.nbytes
+    relative = np.abs(factor2[weighted] / factor[weighted] - 1.0)
+    print(f"\nsums: NoiseFactor {nf_bytes / 2**30:.2f} GiB (float64; it uses Coadd's weight sums); "
+          f"against Covariance.noise_factor (float32 sums): max relative difference {relative.max():.1e}, "
+          f"median {np.median(relative):.1e}")
 
 
 def main():

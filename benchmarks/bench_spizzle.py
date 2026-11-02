@@ -98,7 +98,8 @@ def tdriz_case(inputs, pixfrac, dtype, planes):
                 in_units="cps",
                 expscale=1.0,
                 wtscale=1.0,
-                fillstr="INDEF",
+                # tdriz takes the fill value as a string
+                fillstr=str(np.nan),
                 **kwargs,
             )
             return time.perf_counter() - t0

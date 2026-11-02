@@ -16,6 +16,10 @@ rows ``o`` and ``o'`` of ``W``, computed for every output pixel and offset
 in parallel.  From it come the correlation of each pixel with its
 neighbors and the noise factor of each pixel, by which the variance of a
 sum over a large area exceeds the sum of its pixels' variances.
+
+`NoiseFactor` gives the noise factor alone from two sums instead of one
+per offset, in a second pass over the exposures once their weight sums
+are known.
 """
 import os
 import warnings
@@ -27,6 +31,7 @@ from .operator import _box_rows
 
 __all__ = [
     "Covariance",
+    "NoiseFactor",
 ]
 
 
@@ -236,6 +241,120 @@ class Covariance:
     def _check_added(self):
         if self._cnum is None:
             raise ValueError("no exposure has been added")
+
+
+class NoiseFactor:
+    """Noise factor of the image of drizzled exposures, in a second pass over them.
+
+    The noise factor of `Covariance` needs ``2 r (r + 1) + 1`` output-sized
+    sums, one per offset.  With the weight sums of all exposures known from
+    a first pass, it needs two.  For ``C = sum_k W_k diag(var_k) W_k.T``,
+    each exposure adds to
+
+        T[o] = sum_o' C[o, o'] / wsum[o'] = W @ (var * (W.T @ (1 / wsum)))
+        V[o] = C[o, o] = (W * W) @ var
+
+    and ``noise_factor = wsum * T / V``: each pixel's covariance with every
+    pixel, at every offset, over its variance.  No radius is needed.
+
+    Add every exposure to a `Coadd`, then make a `NoiseFactor` from its
+    weight sums and add the same operators again, kept or built again,
+    each with the variance of its exposure.
+
+    Parameters
+    ----------
+    wsum : ndarray, shape (ny_out, nx_out)
+        Weight sums of all the exposures, such as `Coadd.out_wht`.  Kept,
+        not copied, so it must not change while exposures are added.
+    fillval : float
+        Value where the pixel has no weight or variance.
+    """
+
+    def __init__(self, wsum, fillval=np.nan):
+        wsum = np.asarray(wsum, dtype=np.float64)
+        if wsum.ndim != 2:
+            raise ValueError(f"wsum must be 2D, not of shape {wsum.shape}")
+        self.out_shape = wsum.shape
+        self.fillval = fillval
+        self.n_images = 0
+        self._wsum = wsum
+        self._total = np.zeros(wsum.size)
+        self._vnum = np.zeros(wsum.size)
+
+    def add(self, W, var, iscale=1.0):
+        """Add one exposure that is in the weight sums.
+
+        Parameters
+        ----------
+        W : Operator or scipy.sparse array
+            The exposure's operator, as for `Coadd.add`.
+        var : ndarray, shape (ny, nx)
+            Variance of the exposure's data.
+        iscale : float
+            Factor applied to the data; its square is applied to ``var``.
+        """
+        var = np.asarray(var, dtype=np.float64)
+        matrix, y0, x0, box_ny, box_nx = _box_rows(W, self.out_shape, var.size)
+        wsum = self._wsum[y0:y0 + box_ny, x0:x0 + box_nx].ravel()
+        reached = np.diff(matrix.indptr) > 0
+        if np.any(reached & (wsum <= 0.0)):
+            raise ValueError("the operator reaches output pixels without weight; was its exposure in the weight sums?")
+        inverse = np.zeros(wsum.size)
+        inverse[reached] = 1.0 / wsum[reached]
+        # for each input pixel, its weights over the weight sums of the output pixels it reaches
+        u = matrix.T @ inverse
+        _add_noise_sums(matrix.indptr, matrix.indices, matrix.data, y0, x0, box_ny, box_nx, self.out_shape[1],
+                        var.ravel(), iscale * iscale, u, self._total, self._vnum)
+        self.n_images += 1
+
+    @property
+    def noise_factor(self):
+        """ndarray, shape out_shape: covariance of each pixel with every pixel, over its variance.
+
+        As `Covariance.noise_factor` with a radius of at least the reach;
+        `fillval` where the pixel has no weight or variance.
+        """
+        if self.n_images == 0:
+            raise ValueError("no exposure has been added")
+        wsum = self._wsum.ravel()
+        out = np.full(wsum.size, self.fillval, dtype=np.float64)
+        ok = (wsum != 0.0) & (self._vnum > 0.0)
+        out[ok] = wsum[ok] * self._total[ok] / self._vnum[ok]
+        return out.reshape(self.out_shape)
+
+
+@numba.njit(parallel=True, cache=True, error_model="numpy")
+def _add_noise_sums(indptr, indices, values, y0, x0, box_ny, box_nx, nx_out, var, iscale2, u, total, vnum):
+    """Add ``W @ (var * iscale2 * u)`` to total and ``(W * W) @ (var * iscale2)`` to vnum; rows without entries are left alone.
+
+    Parameters
+    ----------
+    indptr, indices, values : ndarray
+        CSR arrays of W, one row per pixel of the box.
+    y0, x0, box_ny, box_nx : int
+        First output row and column and shape of the box.
+    nx_out : int
+    var : ndarray, shape (n_in,)
+    iscale2 : float
+    u : ndarray, shape (n_in,)
+        ``W.T @ (1 / wsum)``.
+    total, vnum : ndarray of float64, shape (n_out,)
+    """
+    for by in numba.prange(box_ny):
+        for bx in range(box_nx):
+            row = by * box_nx + bx
+            if indptr[row] == indptr[row + 1]:
+                continue
+            s = 0.0
+            v = 0.0
+            for k in range(indptr[row], indptr[row + 1]):
+                w = values[k]
+                vi = var[indices[k]] * iscale2
+                s += w * vi * u[indices[k]]
+                v += w * w * vi
+            o = (y0 + by) * nx_out + x0 + bx
+            total[o] += s
+            vnum[o] += v
 
 
 @numba.njit(parallel=True, cache=True, error_model="numpy")

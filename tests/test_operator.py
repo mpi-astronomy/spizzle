@@ -125,6 +125,44 @@ def test_drizzle_operator_rejects_weights_of_another_shape():
         drizzle_operator(identity_pixmap((5, 6)), (5, 6), weights=np.ones((5, 5)))
 
 
+def test_drizzle_operator_region_equals_zero_weights_outside_it():
+    """drizzle_operator of a rotated exposure with region rows 5-19, columns 8-30 equals the one with zero weight elsewhere."""
+    pixmap = rotated_pixmap((30, 40), 33.0, 1.6, (55.0, 50.0))
+    weights = np.zeros((30, 40))
+    weights[5:20, 8:31] = 1.0
+    expected = drizzle_operator(pixmap, (100, 110), pixfrac=0.8, weights=weights).full()
+
+    W = drizzle_operator(pixmap, (100, 110), pixfrac=0.8, region=(slice(5, 20), slice(8, 31))).full()
+
+    np.testing.assert_array_equal(W.indptr, expected.indptr)
+    np.testing.assert_array_equal(W.indices, expected.indices)
+    np.testing.assert_array_equal(W.data, expected.data)
+
+
+def test_drizzle_operator_region_beyond_the_input_is_clipped():
+    """drizzle_operator of a rotated 30x40 exposure with region rows and columns 0-99 equals the operator without a region."""
+    pixmap = rotated_pixmap((30, 40), 33.0, 1.6, (55.0, 50.0))
+    expected = drizzle_operator(pixmap, (100, 110)).full()
+
+    W = drizzle_operator(pixmap, (100, 110), region=(slice(0, 100), slice(0, 100))).full()
+
+    np.testing.assert_array_equal(W.indices, expected.indices)
+    np.testing.assert_array_equal(W.data, expected.data)
+
+
+def test_drizzle_operator_empty_region_has_no_entries():
+    """drizzle_operator of an exposure with the empty region rows 3-2 gives an operator without entries."""
+    op = drizzle_operator(identity_pixmap((5, 6)), (5, 6), region=(slice(3, 2), slice(None)))
+
+    assert op.matrix.nnz == 0
+
+
+def test_drizzle_operator_rejects_a_region_with_steps():
+    """drizzle_operator with region rows 0:5:2 raises ValueError."""
+    with pytest.raises(ValueError, match="step"):
+        drizzle_operator(identity_pixmap((5, 6)), (5, 6), region=(slice(0, 5, 2), slice(None)))
+
+
 def test_build_operator_matches_scipy():
     """build_operator of a rotated, weighted exposure gives the same CSR arrays as scipy builds from its triplets."""
     c = corners(rotated_pixmap((30, 40), 33.0, 1.6, (55.0, 50.0)), 0.8)

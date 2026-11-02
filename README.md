@@ -25,6 +25,8 @@ image is those sums divided by the output weights.
    WCS, by default interpolated from the WCS on a coarse grid
  - `Covariance`: the covariance between nearby pixels of the co-added
    image, for independent input noise
+ - `NoiseFactor`: the noise factor alone, in a second pass over the
+   exposures, with much less memory than `Covariance`
  - `blot`: a mosaic interpolated back onto an exposure's pixel grid, as
    drizzle's bilinear `blot_image`, for outlier detection
 
@@ -123,6 +125,13 @@ variances), and `drizzle_operator` takes drizzle's `wht_scale` as
 `weight_scale`.  Unit conversions, such as dividing data in counts by the
 exposure time, go in `iscale`.
 
+`drizzle_operator(..., region=(slice(y0, y1), slice(x0, x1)))` drizzles
+only the input pixels in that region, as drizzle's `xmin`, `xmax`, `ymin`
+and `ymax` do (theirs are inclusive, so `y1 = ymax + 1`), and skips the
+geometry of the others.  To leave out any other pixels, give them zero
+weight: entries of zero weight are left out of the operator, so their data
+are never used, NaN or not.
+
 To re-weight an exposure without recomputing its geometry:
 
 ```python
@@ -173,6 +182,30 @@ take `2 r (r + 1) + 1` float32 images the size of the output: 13 for
 radius 2 (native scale, pixfrac 1), 1.4 GiB for the NIRCam mosaic above.
 Checked against noise realizations, and for evenly dithered exposures it
 gives Casertano's correction to about 1% (`benchmarks/check_covariance.py`).
+
+When only the noise factor is needed, `NoiseFactor` gives it from two
+sums instead of one per offset, in a second pass over the exposures once
+their weight sums are known:
+
+```python
+from spizzle import NoiseFactor
+
+nf = NoiseFactor(coadd.out_wht)   # after every exposure is in coadd
+for data, var, weights, wcs in exposures:
+    ...                           # the same operators, kept or built again
+    nf.add(op, var)
+
+err = np.sqrt(coadd.out_var[0] * nf.noise_factor)
+```
+
+Each exposure adds `W @ (var * (W.T @ (1 / wsum)))`, the covariance of
+each pixel with every pixel over that pixel's weight sum, and
+`(W * W) @ var`, so every offset counts and no radius is needed.  The
+sums take 16 bytes per output pixel, against `(2 r (r + 1) + 1) * 4 + 8`
+for `Covariance`: 60 bytes at radius 2, 108 at radius 3.  For the NIRCam
+mosaic above that is 0.36 GiB against 1.37 GiB, for the same factor to
+1.4e-7; the second pass takes about as long as the first, unless the
+operators are kept.
 
 Outlier detection compares each exposure with the median of the
 resampled exposures, interpolated back onto the exposure's pixels.

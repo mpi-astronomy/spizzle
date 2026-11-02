@@ -34,8 +34,8 @@ def drizzle_outputs_with_variance(out_shape, n_var):
     return outputs
 
 
-def tdriz(outputs, data, weights, pixmap, pixfrac=1.0, variances=None, uniqid=1, iscale=1.0, wtscale=1.0):
-    """Drizzle one image into ``outputs`` with drizzle's square kernel."""
+def tdriz(outputs, data, weights, pixmap, pixfrac=1.0, variances=None, uniqid=1, iscale=1.0, wtscale=1.0, **limits):
+    """Drizzle one image into ``outputs`` with drizzle's square kernel; ``limits`` are tdriz's xmin, xmax, ymin, ymax."""
     cdrizzle.tdriz(
         input=data,
         weights=weights,
@@ -52,7 +52,9 @@ def tdriz(outputs, data, weights, pixmap, pixfrac=1.0, variances=None, uniqid=1,
         in_units="cps",
         expscale=1.0,
         wtscale=wtscale,
-        fillstr="INDEF",
+        # tdriz takes the fill value as a string
+        fillstr=str(np.nan),
+        **limits,
     )
 
 
@@ -131,6 +133,34 @@ def test_science_matches_drizzle_for_pixfrac(pixfrac):
     coadd.add(drizzle_operator(pixmap, OUT_SHAPE, pixfrac=pixfrac, weights=weights), data)
 
     np.testing.assert_allclose(coadd.out_img, outputs["output"], rtol=1e-12)
+
+
+def test_region_matches_drizzle_limits():
+    """Coadd.out_img with region rows 5-20, columns 8-30 equals tdriz's output for ymin 5, ymax 20, xmin 8, xmax 30."""
+    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTER)
+    data = random_image(SHAPE, 10.0, 11.0, seed=5)
+    weights = random_image(SHAPE, 0.5, 1.5, seed=6)
+    outputs = drizzle_outputs(OUT_SHAPE)
+    tdriz(outputs, data, weights, pixmap, pixfrac=0.8, xmin=8, xmax=30, ymin=5, ymax=20)
+    coadd = Coadd(OUT_SHAPE)
+
+    coadd.add(drizzle_operator(pixmap, OUT_SHAPE, pixfrac=0.8, weights=weights, region=(slice(5, 21), slice(8, 31))), data)
+
+    np.testing.assert_allclose(coadd.out_img, outputs["output"], rtol=1e-12)
+
+
+def test_region_weights_match_drizzle_limits():
+    """Coadd.out_wht with region rows 5-20, columns 8-30 equals tdriz's weights for ymin 5, ymax 20, xmin 8, xmax 30."""
+    pixmap = distorted_pixmap(SHAPE, 23.0, 1.7, CENTER)
+    weights = random_image(SHAPE, 0.5, 1.5, seed=6)
+    outputs = drizzle_outputs(OUT_SHAPE)
+    tdriz(outputs, np.ones(SHAPE), weights, pixmap, pixfrac=0.8, xmin=8, xmax=30, ymin=5, ymax=20)
+    coadd = Coadd(OUT_SHAPE)
+
+    coadd.add(drizzle_operator(pixmap, OUT_SHAPE, pixfrac=0.8, weights=weights, region=(slice(5, 21), slice(8, 31))),
+              np.ones(SHAPE))
+
+    np.testing.assert_allclose(coadd.out_wht, outputs["counts"], rtol=1e-12, atol=1e-14)
 
 
 @pytest.mark.parametrize("degrees", [0.0, 30.0, 90.0, 137.0])
