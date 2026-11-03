@@ -157,7 +157,7 @@ def run_drizzle(exposures, pixmaps, out_shape, pixfrac, dtype):
 
 def run_spizzle(exposures, pixmaps, out_shape, pixfrac):
     """Co-add all exposures with spizzle; return the Coadd and the operator and add times of each exposure by step."""
-    coadd = Coadd(out_shape, n_var=len(VARIANCES))
+    coadd = Coadd(out_shape, n_var=len(VARIANCES), context=True)
     operator_times = []
     add_times = []
     for exposure, pixmap in zip(exposures, pixmaps):

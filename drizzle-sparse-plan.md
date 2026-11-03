@@ -1004,6 +1004,50 @@ Findings:
    checks on real JWST data against jwst's flags, with injected cosmic
    rays (NIRCam short and long wavelength, MIRI).
 
+   With stpsf PSFs, 2026-11-02: NIRCam F070W, the most undersampled NIRCam
+   filter. The PSF is stpsf 2.3.0's `OVERDIST` for NRCA1 (distortion and
+   detector blur, no IPC), at 10x oversampling, summed over each pixel. Its
+   FWHM is 1.2 pixels, with 33% of the light in the central pixel when a
+   star is centered. The field has 160 stars on 192x192 pixels, in 4
+   exposures shifted by random sub-pixel offsets (shifts only).
+
+   Without noise, the error of the predicted brightest pixel of each star:
+   - today: 47% (5-95%: 22-57%);
+   - median of input pixels, scale 0.67, pixfrac 1: 24%;
+   - scale 0.5, pixfrac 1: 8%;
+   - scale 0.5, pixfrac 0.8: 5%;
+   - with the correction step: 2-3%;
+   - scale 0.5, pixfrac 0.6, with the correction step: 0% (5-95%: -8% to
+     +11%).
+
+   The clipped mean is blurrier than the median here (11-17%), because
+   it averages.
+
+   With noise (5 e- plus Poisson), stars of 1e3-1e6 e-, cosmic rays on 0.5%
+   of the pixels, and jwst's two-pass rule (snr 5 and 4, tolerance
+   `scale * D`); 3 realizations; only cosmic rays of at least 8 times the
+   local noise are counted:
+
+   | reference | tolerance | cosmic rays found | within 3 px of a star | star-core pixels flagged | wing flags / 10^4 | sky flags / 10^4 |
+   | --- | --- | ---: | ---: | ---: | ---: | ---: |
+   | today | 1.2 / 0.7 (jwst) | 87.6% | 48% | 15.8% | 1 | 0.0 |
+   | today | 0.5 / 0.3 | 92.8% | 61% | 41.2% | 152 | 2.0 |
+   | clipped mean, scale 0.5, pixfrac 1 | 1.2 / 0.7 | 86.0% | 47% | 0.3% | 0 | 0.0 |
+   | clipped mean, scale 0.5, pixfrac 1 | 0.5 / 0.3 | 92.9% | 61% | 6.5% | 8 | 1.7 |
+   | same, plus correction | 0.5 / 0.3 | 92.7% | 60% | 3.3% | 3 | 1.4 |
+   | clipped mean, scale 0.5, pixfrac 0.8, plus correction | 0.5 / 0.3 | 92.0% | 60% | 2.8% | 1 | 1.3 |
+   | clipped mean, scale 0.5, pixfrac 1 | 0.3 / 0.2 | 95.0% | 68% | 12.8% | 48 | 3.8 |
+   | clipped mean, scale 0.5, pixfrac 0.6, plus correction | 0.5 / 0.3 | 69.8% | 45% | 0.0% | 0 | 0.4 |
+
+   With a sharper reference, jwst's tolerance can be lowered: at 0.5 / 0.3
+   about 5 points more cosmic rays are found than today (12 points more
+   near stars), with 3-7% of star-core pixels flagged instead of 16%. The
+   sharpest reference (pixfrac 0.6 with the correction step) loses cosmic
+   rays: with so few input pixels per output pixel, an exposure's own
+   cosmic ray partly gets into its own prediction. The script is
+   `scripts/exp_outlier_reference.py` in snowblind; it needs stpsf and its
+   data (184 MB), and with its defaults it reproduces these tables.
+
    Ways that use no drizzle, to weigh in snowblind (spizzle would supply
    the pixel maps onto a common frame):
    - predict each exposure from the others interpolated directly onto

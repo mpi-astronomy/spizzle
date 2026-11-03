@@ -15,7 +15,7 @@ sums over areas typical in aperture photometry.
 | --- | --- |
 | `pixel_map` | the pixel map of an exposure onto an output grid, from the two WCS; fast, by splines through a coarse grid |
 | `drizzle_operator` | the square-kernel operator `W` of one exposure, an `Operator` on the exposure's region of the output grid |
-| `Coadd` | the weighted mean of exposures: science, weights, variance planes and context, summed in float64 |
+| `Coadd` | the weighted mean of exposures: science, weights, variance planes and, if asked for, context, summed in float64 |
 | `Covariance` | the covariance between neighboring output pixels, the noise factor, and a correlation file |
 | `NoiseFactor` | the noise factor alone, in a second pass over the exposures, with little memory |
 | `blot` | a mosaic interpolated back onto an exposure's pixels, as drizzle's bilinear `blot_image` |

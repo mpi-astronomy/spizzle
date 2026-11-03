@@ -9,6 +9,10 @@
 
 ### Changed
 
+- `Coadd` keeps drizzle's context only when made with `context=True`;
+  `out_ctx` is None otherwise.  The context takes one int32 plane of the
+  output size per 32 exposures, more memory than the rest of `Coadd` for
+  a large set of exposures.
 - The README is shorter: what is in the package, how to install it, how
   to start, and a table of its speed.  The details moved to the
   documentation page.

@@ -298,7 +298,7 @@ def test_context_of_two_exposures_matches_drizzle():
     outputs = drizzle_outputs(OUT_SHAPE)
     tdriz(outputs, np.ones(SHAPE), np.ones(SHAPE), pixmaps[0], pixfrac=0.8, uniqid=1)
     tdriz(outputs, np.ones(SHAPE), np.ones(SHAPE), pixmaps[1], pixfrac=0.8, uniqid=2)
-    coadd = Coadd(OUT_SHAPE)
+    coadd = Coadd(OUT_SHAPE, context=True)
 
     coadd.add(drizzle_operator(pixmaps[0], OUT_SHAPE, pixfrac=0.8), np.ones(SHAPE))
     coadd.add(drizzle_operator(pixmaps[1], OUT_SHAPE, pixfrac=0.8), np.ones(SHAPE))

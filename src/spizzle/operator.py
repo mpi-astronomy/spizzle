@@ -212,11 +212,15 @@ class Coadd:
         Number of variance planes given with each exposure.
     fillval : float
         Value of output pixels without weight, in `out_img` and `out_var`.
+    context : bool
+        Keep drizzle's context, one int32 plane of the output size per 32
+        exposures, as `out_ctx`.
     """
 
-    def __init__(self, out_shape, n_var=0, fillval=np.nan):
+    def __init__(self, out_shape, n_var=0, fillval=np.nan, context=False):
         self.out_shape = tuple(out_shape)
         self.fillval = fillval
+        self.context = context
         self.n_images = 0
         n_out = self.out_shape[0] * self.out_shape[1]
         self._num = np.zeros(n_out)
@@ -246,12 +250,15 @@ class Coadd:
         if len(variances) != len(self._vnum):
             raise ValueError(f"expected {len(self._vnum)} variance planes, got {len(variances)}")
 
-        plane, bit = divmod(self.n_images, 32)
-        if plane == len(self._ctx):
-            self._ctx.append(np.zeros(self._num.size, dtype=np.int32))
-        mask = np.uint32(1 << bit).view(np.int32)
+        if self.context:
+            plane, bit = divmod(self.n_images, 32)
+            if plane == len(self._ctx):
+                self._ctx.append(np.zeros(self._num.size, dtype=np.int32))
+            ctx, mask = self._ctx[plane], np.uint32(1 << bit).view(np.int32)
+        else:
+            ctx, mask = np.zeros(1, dtype=np.int32), np.int32(0)
         rows = (matrix.indptr, matrix.indices, matrix.data, y0, x0, box_ny, box_nx, self.out_shape[1])
-        _add_data(*rows, data.ravel(), iscale, self._num, self._wsum, self._ctx[plane], mask)
+        _add_data(*rows, data.ravel(), iscale, self._num, self._wsum, ctx, mask)
         for vnum, var in zip(self._vnum, variances):
             if var is not None:
                 _add_variance(*rows, np.asarray(var, dtype=np.float64).ravel(), iscale * iscale, vnum)
@@ -275,7 +282,12 @@ class Coadd:
 
     @property
     def out_ctx(self):
-        """ndarray of int32, shape (n_planes,) + out_shape: bit ``k % 32`` of plane ``k // 32`` set where exposure k lands."""
+        """ndarray of int32, shape (n_planes,) + out_shape: bit ``k % 32`` of plane ``k // 32`` set where exposure k lands.
+
+        None unless the Coadd was made with ``context=True``.
+        """
+        if not self.context:
+            return None
         return np.array(self._ctx, dtype=np.int32).reshape((len(self._ctx),) + self.out_shape)
 
     def _normalize(self, num, den):
@@ -437,7 +449,8 @@ def _add_data(indptr, indices, values, y0, x0, box_ny, box_nx, nx_out, data, isc
     """Add ``W @ (data * iscale)`` to num and ``W @ 1`` to wsum, and set ``mask`` in ctx where a row of W has a positive entry.
 
     drizzle sets the context bit for any positive contribution.  Rows
-    without entries are left alone.
+    without entries are left alone.  With ``mask`` zero, ctx is not
+    touched and can be any int32 array.
 
     Parameters
     ----------
@@ -468,7 +481,7 @@ def _add_data(indptr, indices, values, y0, x0, box_ny, box_nx, nx_out, data, isc
             o = (y0 + by) * nx_out + x0 + bx
             num[o] += s
             wsum[o] += sw
-            if hit:
+            if hit and mask != 0:
                 ctx[o] |= mask
 
 

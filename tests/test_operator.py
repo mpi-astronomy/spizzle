@@ -329,9 +329,18 @@ def test_coadd_propagates_nan_data_with_weight():
     np.testing.assert_array_equal(np.isnan(coadd.out_img), np.isnan(data))
 
 
+def test_coadd_has_no_context_by_default():
+    """Coadd.out_ctx after adding an exposure to a Coadd made without context is None."""
+    coadd = Coadd((4, 6))
+
+    coadd.add(drizzle_operator(identity_pixmap((4, 4)), (4, 6)), np.ones((4, 4)))
+
+    assert coadd.out_ctx is None
+
+
 def test_coadd_context_of_two_exposures():
     """Coadd.add of exposures covering output columns 0-3 and 2-5 gives context 1, 1, 3, 3, 2, 2 along a row."""
-    coadd = Coadd((4, 6))
+    coadd = Coadd((4, 6), context=True)
     left = identity_pixmap((4, 4))
     right = identity_pixmap((4, 4)) + [2.0, 0.0]
 
@@ -344,7 +353,7 @@ def test_coadd_context_of_two_exposures():
 def test_coadd_context_of_32_exposures_sets_all_bits():
     """Coadd.add of 32 exposures on the same grid gives one int32 context plane with all bits set, -1."""
     W = drizzle_operator(identity_pixmap((3, 4)), (3, 4))
-    coadd = Coadd((3, 4))
+    coadd = Coadd((3, 4), context=True)
 
     for _ in range(32):
         coadd.add(W, np.ones((3, 4)))
@@ -355,7 +364,7 @@ def test_coadd_context_of_32_exposures_sets_all_bits():
 def test_coadd_context_of_33_exposures_adds_a_plane():
     """Coadd.add of 33 exposures on the same grid gives a second context plane with bit 0 set."""
     W = drizzle_operator(identity_pixmap((3, 4)), (3, 4))
-    coadd = Coadd((3, 4))
+    coadd = Coadd((3, 4), context=True)
 
     for _ in range(33):
         coadd.add(W, np.ones((3, 4)))

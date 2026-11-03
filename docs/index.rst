@@ -26,7 +26,6 @@ Usage
     image = coadd.out_img
     weight = coadd.out_wht
     variance = coadd.out_var[0]
-    context = coadd.out_ctx
 
 Pixel maps
 ----------

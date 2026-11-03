@@ -48,7 +48,7 @@ def run_spizzle(library, resamp, out_shape, stepsize):
     from jwst.resample.resample_step import GOOD_BITS
     from stcal.resample.utils import build_driz_weight, resample_range
 
-    coadd = Coadd(out_shape, n_var=3)
+    coadd = Coadd(out_shape, n_var=3, context=True)
     sv = StcalVariance(out_shape, weight_type="ivm", pixel_scale_ratio=resamp.pixel_scale_ratio)
     elapsed = 0.0
     with library:
