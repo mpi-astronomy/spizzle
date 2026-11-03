@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-03
+
 ### Added
 
 - `benchmarks/speed_table.py`: the speed table of the README, drizzle
@@ -100,5 +102,6 @@ pipeline's variance for comparison.
   drizzle's bilinear `tblot`; `Covariance` and `NoiseFactor` against the
   dense covariance; and `StcalVariance` against stcal's arithmetic.
 
-[Unreleased]: https://github.com/mpi-astronomy/spizzle/compare/0.1.0...HEAD
+[Unreleased]: https://github.com/mpi-astronomy/spizzle/compare/0.2.1...HEAD
+[0.2.1]: https://github.com/mpi-astronomy/spizzle/compare/0.1.0...0.2.1
 [0.1.0]: https://github.com/mpi-astronomy/spizzle/releases/tag/0.1.0
