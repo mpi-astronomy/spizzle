@@ -110,10 +110,8 @@ arrays.  Until that is in a drizzle release, install it from the branch:
     pip install "drizzle @ git+https://github.com/jdavies-st/drizzle.git@float64-phase2-c-accepts-float64"
     pytest tests
 
-CI also tests the lowest versions that `pyproject.toml` allows, with
-`uv pip install --resolution lowest-direct -e ".[test]"`.  `benchmarks/`
-has the timings and the comparisons with drizzle, the JWST pipeline and
-noise realizations.
+`benchmarks/` has the timings and the comparisons with drizzle, the JWST
+pipeline and noise realizations.
 
 
 # Citing spizzle
