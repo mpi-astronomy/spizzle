@@ -29,10 +29,8 @@ steps of `drizzle_operator`, to keep the geometry and re-weight it.
 
     pip install spizzle
 
-spizzle needs Python 3.11 or later, numba, numpy and scipy.
-`Covariance.write_correlation` also needs astropy, and
-`pip install "spizzle[jwst]"` adds jwst for comparing spizzle with the JWST
-pipeline (`benchmarks/compare_stcal.py`).
+Install extras `pip install "spizzle[jwst]"` adds jwst for comparing
+spizzle with the JWST pipeline (`benchmarks/compare_stcal.py`).
 
 
 # Getting started
